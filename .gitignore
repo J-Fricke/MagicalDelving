@@ -99,4 +99,33 @@ Network Trash Folder
 Temporary Items
 .apdisk
 
+### Python template
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Packaging / build
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Test / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local env files / secrets
+.env
+.env.*
+
+# JetBrains module files (you already had this)
 *.iml
