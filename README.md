@@ -1,45 +1,40 @@
-# MagicalDelving — TopDeck cEDH Meta Diff (with Moxfield highlight)
+# Magical Delving — A Suite of cEDH Tools
 
-A small CLI tool that pulls recent cEDH tournament results from **TopDeck.gg** and compares card inclusion rates between:
+Magical Delving is a growing suite of tools for analyzing and improving cEDH decks and metagames.
 
-- the **best-placing deck per event** for a selected commander set, and
-- a configurable **comparison group** (e.g., other Top 16 decks for that commander set, excluding the best deck).
+**Current tool:**
+- **TopDeck Meta Diff** — compares card inclusion rates for a chosen commander set between:
+  - the **best-placing deck per event** (for that commander set), and
+  - a configurable **comparison pool** (e.g., other top-cut decks for that commander set, excluding the best deck).
 
-Optionally, you can provide a **Moxfield deck link** to highlight cards that are already in your list.
-
----
-
-## Features
-
-- Fetch tournaments from TopDeck.gg `/api/v2/tournaments` (POST).
-- Discover common commander sets from recent events and select one interactively.
-- Compare **Best% vs Comp%** card inclusion and compute **Diff = Best% - Comp%**.
-- Colorized console output (auto-detected; no flags required).
-- Optional Moxfield integration:
-  - Accepts a Moxfield deck URL or deck id
-  - Highlights rows that are in your deck
-  - If the deck is unlisted/private, prints a message and continues without deck-aware tags
+Optional: provide a **Moxfield deck link** to highlight cards already in your list.
 
 ---
 
 ## Requirements
 
 - Python 3.10+ recommended
-- `requests`
-
-Install dependencies:
-
-```bash
-pip install -r requirements.txt
-# or
-pip install requests
-```
+- TopDeck.gg API key (set via env var)
+- `requests` (installed automatically if you use the install steps below)
 
 ---
 
-## API Key Setup (TopDeck.gg)
+## Install (recommended)
 
-This script expects your TopDeck API key in an environment variable.
+From the repo root:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install -e ".[dev]"
+```
+
+This installs Magical Delving in **editable** mode (changes you make are immediately reflected).
+
+---
+
+## TopDeck API Key
 
 Default env var name: `TOPDECK_API_KEY`
 
@@ -47,160 +42,92 @@ Default env var name: `TOPDECK_API_KEY`
 
 ```bash
 export TOPDECK_API_KEY="YOUR_KEY_HERE"
-python topdeck_meta.py --last 30
 ```
 
 ### Windows (PowerShell)
 
 ```powershell
 $env:TOPDECK_API_KEY="YOUR_KEY_HERE"
-python topdeck_meta.py --last 30
 ```
 
 ---
 
-## Usage
+## Run the tool
 
-Basic run:
+You now have two equivalent ways to run it:
 
+### Option A: direct tool command
 ```bash
-python topdeck_meta.py
+topdeck-meta --last 30
 ```
 
-Show CLI flags:
-
+### Option B: suite command (subcommand)
 ```bash
-python topdeck_meta.py -h
-python topdeck_meta.py --help
+magicaldelving topdeck-meta --last 30
 ```
 
-Example (common debug run):
-
+Show flags/help:
 ```bash
-python topdeck_meta.py --last 30
-```
-
-Example (load your Moxfield deck and highlight cards):
-
-```bash
-python topdeck_meta.py --last 30 --moxfield "https://moxfield.com/decks/JUaSlpi5W0qmqYpHaqkOEA"
-```
-
-Example (skip the interactive commander selection):
-
-```bash
-python topdeck_meta.py --last 30 --commander "Tymna the Weaver|Dargo, the Shipwrecker"
-```
-
-Example (choose compare pool):
-
-```bash
-python topdeck_meta.py --last 30 --compare topY_excluding_best
-python topdeck_meta.py --last 30 --compare all_non_best
-python topdeck_meta.py --last 30 --compare rest
+topdeck-meta -h
+magicaldelving -h
+magicaldelving topdeck-meta -h
 ```
 
 ---
 
-## How the comparison works
+## Moxfield highlighting
+
+Provide either a deck URL or deck id:
+
+```bash
+topdeck-meta --last 30 --moxfield "https://moxfield.com/decks/JUaSlpi5W0qmqYpHaqkOEA"
+# or
+topdeck-meta --last 30 --moxfield "JUaSlpi5W0qmqYpHaqkOEA"
+```
+
+If the deck is **not public** (unlisted/private), Moxfield may return 401/403/404. The tool will warn you and continue without deck-aware tags.
+
+---
+
+## How the comparison works (TopDeck Meta Diff)
 
 For each tournament:
-1. Find all decks of the chosen commander set (based on `deckObj.Commanders`).
+1. Find all decks of the chosen commander set (via `deckObj.Commanders`).
 2. Select the **best-placing** deck of that commander set in that tournament (first occurrence in standings order).
 3. Add that deck to the **Best-of-event** sample.
-4. Add the remaining decks of that commander set to the **Comparison** pool according to `--compare`:
-   - `topY_excluding_best`: decks within the Top `--topY` cut excluding the best deck
-   - `rest`: decks outside Top `--topY` excluding the best deck
-   - `all_non_best`: all other decks of that commander set excluding the best deck
+4. Add the remaining decks of that commander set to the **Comparison** pool based on `--compare`:
+  - `topY_excluding_best`: decks within the top-cut `--topY` excluding the best deck
+  - `rest`: decks outside top-cut excluding the best deck
+  - `all_non_best`: all other decks of that commander set excluding the best deck
 
-Then the tool computes inclusion rates for each card:
-
-- `Best%` = (best decks containing card) / (number of best decks) * 100  
-- `Comp%` = (comparison decks containing card) / (number of comparison decks) * 100  
+Inclusion rates:
+- `Best%` = (best decks containing card) / (best decks) * 100
+- `Comp%` = (comparison decks containing card) / (comparison decks) * 100
 - `Diff` = `Best% - Comp%`
 
-Rows are currently sorted by **Diff descending**.
+Rows are sorted by **Diff descending**.
 
 ---
 
-## Tagging & colors
-
-Every row has a tag.
-
-High-signal tags (colored):
-
-- **Yellow**: `CORE_MISSING` — staple in best decks, missing from your deck
-- **Red**: `CUT`
-- **Magenta**: `MAYBE_CUT`
-- **Green**: `ADD`
-- **Cyan**: `MAYBE_ADD`
-- **Blue**: `SPICY` — winner-skewed tech that’s not common enough for MAYBE_ADD
-- **Gray**: `WATCH` — appears in best decks but not enough to recommend
-
-Low-signal tags (uncolored but still present):
-
-- `CORE` — staple and already present in your deck
-- `KEEP` — in your deck, no other tag triggered
-- `COMP_ONLY` — appears only in comparison pool, not best pool
-- `OTHER` — fallback (rare)
-
-If you provide a Moxfield deck, rows for cards in your list are:
-- prefixed with `*`
-- bolded when ANSI color is enabled
-
----
-
-## Moxfield notes
-
-- Provide either a deck URL or just the deck id:
-  - `https://moxfield.com/decks/<id>`
-  - `<id>`
-- The script fetches deck JSON via:
-  - `https://api2.moxfield.com/v2/decks/all/<id>`
-- If the deck is **unlisted/private**, Moxfield often returns 401/403/404. The script will:
-  - tell you to set the deck to **Public**
-  - continue without deck-aware highlighting
-
----
-
-## Common troubleshooting
-
-### `ModuleNotFoundError: No module named 'requests'`
-
-Install dependencies:
-
-```bash
-pip install requests
-```
-
-### TopDeck 502 / Cloudflare errors
-
-The script retries a few times with backoff. If it still fails:
-- try again later
-- reduce the scope (e.g., smaller `--last`)
-- raise `participant-min` to reduce returned events
-
-### No tournaments fetched
-Try:
-- increasing `--last`
-- lowering `--participant-min`
-
----
-
-## Repo layout suggestion
+## Repo structure (target)
 
 ```
-magicaldelving/
-  topdeck_meta.py
+MagicalDelving/
+  pyproject.toml
   README.md
-  requirements.txt
+  LICENSE
   .gitignore
-```
 
-`requirements.txt`:
+  src/
+    magicaldelving/
+      __init__.py
+      cli.py
+      topdeck_meta/
+        __init__.py
+        tool.py
 
-```
-requests
+  tests/
+    (optional)
 ```
 
 ---

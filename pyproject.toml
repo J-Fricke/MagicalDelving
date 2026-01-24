@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "magicaldelving"
+version = "0.1.0"
+description = "Magical Delving - A suite of cEDH tools."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Joshua Fricke" }]
+dependencies = [
+  "requests",
+]
+
+[project.optional-dependencies]
+dev = [
+  "ruff>=0.5.0",
+  "pytest>=8.0.0",
+]
+
+[project.scripts]
+# Suite entrypoint (subcommands)
+magicaldelving = "magicaldelving.cli:main"
+# Convenience direct tool entrypoint
+topdeck-meta = "magicaldelving.topdeck_meta.tool:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
