@@ -1,3 +1,4 @@
+#cli.py
 import sys
 
 def main() -> int:
@@ -15,8 +16,10 @@ def main() -> int:
             "  magicaldelving <tool> [args...]\n\n"
             "Tools:\n"
             "  topdeck-meta   TopDeck Meta Diff + optional Moxfield highlight\n\n"
+            "  mulligan-sim   Mulligan + draw/win turn Monte Carlo\n\n"
             "Help:\n"
             "  magicaldelving topdeck-meta -h\n"
+            "  magicaldelving mulligan-sim -h\n"
         )
         return 0
 
@@ -24,6 +27,12 @@ def main() -> int:
 
     if tool in ("topdeck-meta", "topdeck", "meta"):
         from magicaldelving.topdeck_meta.tool import main as tool_main
+        sys.argv = [sys.argv[0]] + rest
+        tool_main()
+        return 0
+
+    if tool in ("mulligan-sim", "mulligan", "sim"):
+        from magicaldelving.mulligan_sim.tool import main as tool_main
         sys.argv = [sys.argv[0]] + rest
         tool_main()
         return 0
