@@ -2,10 +2,12 @@
 
 Magical Delving is a growing suite of tools for analyzing and improving EDH decks with a lean towards competitive and metagames.
 
-**Current tool:**
+**Tool:**
 - **TopDeck Meta Diff** — compares card inclusion rates for a chosen commander set between:
   - the **best-placing deck per event** (for that commander set), and
   - a configurable **comparison pool** (e.g., other top-cut decks for that commander set, excluding the best deck).
+- **Mulligan Simulator** - simulates mulligans to establish if a deck can get a draw engine/mana/win by certain turns
+  - load moxfield deck to start simulating, set your conditions and if needed overload logic some.
 
 Optional: provide a **Moxfield deck link** to highlight cards already in your list.
 
