@@ -69,6 +69,11 @@ import requests
 import re
 from collections import Counter
 from typing import Any, Dict, List, Tuple, Optional, Set
+from magicaldelving.moxfield import (
+    deck_id_from_url as moxfield_deck_id_from_url,
+    fetch_deck_json_single_try as fetch_moxfield_deck_json_single_try,
+    parse_moxfield_json_to_cards,
+)
 
 
 # ----------------------------
@@ -406,50 +411,6 @@ def run_best_vs_compare(
 
 # ----------------------------
 # Moxfield: single-try fetch + visibility gate
-# ----------------------------
-def moxfield_deck_id_from_url(url_or_id: str) -> str:
-    s = (url_or_id or "").strip()
-    m = re.search(r"/decks/([A-Za-z0-9_-]+)", s)
-    return m.group(1) if m else s
-
-
-def fetch_moxfield_deck_json_single_try(deck_url_or_id: str, timeout_s: int = 30) -> Dict[str, Any]:
-    deck_id = moxfield_deck_id_from_url(deck_url_or_id)
-    url = f"https://api2.moxfield.com/v2/decks/all/{deck_id}"
-
-    r = requests.get(url, timeout=timeout_s, headers={"User-Agent": "MagicalDelving/0.1 (+local script)"})
-
-    if r.status_code in (401, 403, 404):
-        raise RuntimeError(
-            f"Moxfield deck not accessible (HTTP {r.status_code}). "
-            "If the deck is unlisted/private, change it to Public before comparison will work."
-        )
-
-    r.raise_for_status()
-    data = r.json()
-    if not isinstance(data, dict):
-        raise RuntimeError("Moxfield returned non-object JSON.")
-    return data
-
-
-def parse_moxfield_json_to_cards(deck_json: Dict[str, Any]) -> Dict[str, int]:
-    cards: Dict[str, int] = {}
-    mainboard = deck_json.get("mainboard") or {}
-    if isinstance(mainboard, dict):
-        for name, entry in mainboard.items():
-            if not name:
-                continue
-            qty = 1
-            if isinstance(entry, dict):
-                q = entry.get("quantity")
-                if isinstance(q, int) and q > 0:
-                    qty = q
-            cards[norm(name)] = cards.get(norm(name), 0) + qty
-    return cards
-
-
-# ----------------------------
-# Tagging + printing
 # ----------------------------
 def compute_tag(in_deck: bool, best_pct: float, comp_pct: float, diff: float) -> str:
     core_best_pct = DEFAULTS["core_best_pct"]

@@ -1,6 +1,6 @@
 # Magical Delving — A Suite of cEDH Tools
 
-Magical Delving is a growing suite of tools for analyzing and improving cEDH decks and metagames.
+Magical Delving is a growing suite of tools for analyzing and improving EDH decks with a lean towards competitive and metagames.
 
 **Current tool:**
 - **TopDeck Meta Diff** — compares card inclusion rates for a chosen commander set between:
