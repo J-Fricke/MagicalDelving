@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import requests
+from requests import RequestException
 
 
 _USER_AGENT = "MagicalDelving/0.1 (+https://github.com/J-Fricke/MagicalDelving)"
@@ -109,14 +110,20 @@ class ScryfallClient:
         for i in range(0, len(unfetched), CHUNK):
             chunk = unfetched[i : i + CHUNK]
             payload = {"identifiers": [{"name": c} for c in chunk]}
-            r = requests.post(
-                _COLLECTION_URL,
-                json=payload,
-                timeout=self.timeout_s,
-                headers={"User-Agent": _USER_AGENT},
-            )
-            r.raise_for_status()
-            data = r.json()
+            try:
+                r = requests.post(
+                    _COLLECTION_URL,
+                    json=payload,
+                    timeout=self.timeout_s,
+                    headers={"User-Agent": _USER_AGENT},
+                )
+                r.raise_for_status()
+                data = r.json()
+            except RequestException as e:
+                raise RuntimeError(
+                    "Failed to reach Scryfall. If you're running offline, set MAGICALDELVING_OFFLINE=1 "
+                    "(or pass --offline in mulligan-sim) after warming the cache once on a machine with internet."
+                ) from e
             cards = data.get("data") if isinstance(data, dict) else None
             if not isinstance(cards, list):
                 # if Scryfall is unhappy, treat everything as missing

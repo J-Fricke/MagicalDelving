@@ -25,6 +25,7 @@ dev = [
 magicaldelving = "magicaldelving.cli:main"
 # Convenience direct tool entrypoint
 topdeck-meta = "magicaldelving.topdeck_meta.tool:main"
+mulligan-sim = "magicaldelving.mulligan_sim.tool:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
