@@ -1,7 +1,7 @@
 import argparse
 import json
 import sys
-from typing import Optional
+from typing import Optional, Set, List, TextIO
 
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
@@ -43,6 +43,12 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 
     ap.add_argument("--json", action="store_true", help="Output JSON instead of text")
 
+    ap.add_argument(
+        "--explain-roles",
+        action="store_true",
+        help="Print which cards were classified as DrawEngine/Refill/Ramp/Wincon and why (moxfield/tag/oracle).",
+    )
+
     return ap.parse_args(argv)
 
 
@@ -51,6 +57,68 @@ def read_deck_text(path: str) -> str:
         return sys.stdin.read()
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
+
+
+def _role_sources(
+        inline_tags: Set[str],
+        oracle_roles: Set[str],
+        role: str,
+        roles_from_tags_fn,
+) -> List[str]:
+    mx_tags = {t for t in inline_tags if t.startswith("Mx:")}
+    manual_tags = set(inline_tags) - mx_tags
+
+    mx_roles = roles_from_tags_fn(mx_tags)
+    manual_roles = roles_from_tags_fn(manual_tags)
+
+    src: List[str] = []
+    if role in mx_roles:
+        src.append("moxfield")
+    elif role in manual_roles:
+        src.append("tag")
+
+    if role in oracle_roles:
+        src.append("oracle")
+
+    return src
+
+
+def _print_role_report(deck, idx, out: TextIO) -> None:
+    from magicaldelving.mulligan_sim.card_facts import infer_roles, roles_from_tags
+
+    ROLE_SET = ["DrawEngine", "Refill", "Ramp", "Wincon"]
+
+    buckets = {r: [] for r in ROLE_SET}
+
+    for name in sorted(deck.counts.keys(), key=str.lower):
+        facts = idx.facts(name)
+        if facts is None:
+            continue
+
+        inline_tags = set(deck.inline_tags.get(name, set()))
+        oracle_roles = infer_roles(facts)
+        all_roles = idx.roles(name)
+
+        for role in ROLE_SET:
+            if role not in all_roles:
+                continue
+            src = _role_sources(inline_tags, oracle_roles, role, roles_from_tags)
+            label = f"{name} ({'+'.join(src)})" if src else name
+            buckets[role].append(label)
+
+    print("\nrole_classification:", file=out)
+    for role in ROLE_SET:
+        pretty = {
+            "DrawEngine": "Draw engines",
+            "Refill": "Refills (one-shot draw)",
+            "Ramp": "Ramp",
+            "Wincon": "Wincons",
+        }[role]
+        xs = buckets.get(role) or []
+        print(f"{pretty} ({len(xs)}):", file=out)
+        for x in xs:
+            print(f"  - {x}", file=out)
+        print("", file=out)
 
 
 def main() -> int:
@@ -77,7 +145,6 @@ def main() -> int:
             return 2
         deck_text = deck_json_to_deck_text(deck_json)
     else:
-        # default: read from --deck if provided, otherwise stdin
         path = args.deck if args.deck is not None else "-"
         deck_text = read_deck_text(path)
 
@@ -87,7 +154,6 @@ def main() -> int:
         print(f"ERROR: Failed to parse decklist: {e}", file=sys.stderr)
         return 2
 
-    # Build card facts map via Scryfall (+ cache)
     uniq_names = sorted(deck.counts.keys(), key=str.lower)
 
     scry = ScryfallClient(cache_path=args.scryfall_cache, offline=bool(args.offline))
@@ -107,6 +173,11 @@ def main() -> int:
     facts_roles = build_facts_and_roles(found_map, inline_tags=deck.inline_tags)
     idx = CardIndex(facts_roles)
 
+    if args.explain_roles:
+        # Keep JSON clean if requested.
+        report_out = sys.stderr if args.json else sys.stdout
+        _print_role_report(deck, idx, report_out)
+
     goals = SimGoals(draw_by_turn=args.draw_by, win_by_turn=args.win_by, damage_threshold=args.damage_threshold)
     cfg = SimConfig(trials=args.iters, seed=args.seed)
 
@@ -116,10 +187,13 @@ def main() -> int:
         print(json.dumps(results, indent=2, sort_keys=True))
         return 0
 
-    print(f"trials={results.get('trials')}  draw_ok={results.get('draw_ok_rate'):.3f}  win_ok={results.get('win_ok_rate'):.3f}")
+    print(
+        f"trials={results.get('trials')}  "
+        f"draw_ok={results.get('draw_ok_rate'):.3f}  "
+        f"win_ok={results.get('win_ok_rate'):.3f}"
+    )
     dist = results.get("first_win_turn_dist") or {}
     if dist:
-        # show earliest few turns
         earliest = sorted((int(k), int(v)) for k, v in dist.items())[:8]
         print("first_win_turns:")
         for t, c in earliest:

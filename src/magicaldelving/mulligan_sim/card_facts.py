@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from typing import Iterable
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Set, Tuple
 
@@ -119,6 +119,13 @@ def _augment_roles_with_tags(roles: Set[str], tags: Set[str]) -> None:
             continue
         roles.add(t)
         roles |= _roles_from_tag(t)
+
+
+def roles_from_tags(tags: Iterable[str]) -> Set[str]:
+    out: Set[str] = set()
+    for t in tags:
+        out |= _roles_from_tag(t)
+    return out
 
 
 @dataclass(frozen=True)
