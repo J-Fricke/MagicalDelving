@@ -95,7 +95,9 @@ def run_sim(
                 st.tokens_created_this_turn += token_makers
 
             # draw engine online?
-            engine_online = engine_online or any("DrawEngine" in card_index.roles_for_perm(p) for p in st.iter_permanents())
+            engine_online = engine_online or any(
+                "DrawEngine" in card_index.roles_for_perm(p) for p in st.iter_permanents()
+            )
             if engine_online and st.library:
                 st.hand.append(st.library.pop(0))
 
@@ -154,10 +156,25 @@ def run_sim(
     dist = Counter(first_win_turns)
 
     wins_total = len(first_win_turns)
+
     avg_win_turn_wins_only = (sum(first_win_turns) / wins_total) if wins_total else None
     avg_win_turn_capped = (
         (sum(first_win_turns) + (cfg.trials - wins_total) * (cfg.max_turns + 1)) / cfg.trials
         if cfg.trials else None
+    )
+
+    max_win_turn = max(first_win_turns) if first_win_turns else None
+
+    avg_to_max_delta_wins_only = (
+        (max_win_turn - avg_win_turn_wins_only)
+        if (max_win_turn is not None and avg_win_turn_wins_only is not None)
+        else None
+    )
+
+    avg_to_max_delta_capped = (
+        (max_win_turn - avg_win_turn_capped)
+        if (max_win_turn is not None and avg_win_turn_capped is not None)
+        else None
     )
 
     return {
@@ -169,6 +186,9 @@ def run_sim(
         "wins_total": wins_total,
         "avg_win_turn_wins_only": avg_win_turn_wins_only,
         "avg_win_turn_capped": avg_win_turn_capped,
+        "max_win_turn": max_win_turn,
+        "avg_to_max_delta_wins_only": avg_to_max_delta_wins_only,
+        "avg_to_max_delta_capped": avg_to_max_delta_capped,
         "sim_max_turns": cfg.max_turns,
         "first_win_turn_dist": {str(k): int(v) for k, v in sorted(dist.items())},
         "goals": {

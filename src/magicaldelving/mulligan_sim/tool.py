@@ -205,6 +205,8 @@ def main() -> int:
     draw_count = int(results.get("draw_ok_count") or round(draw_rate * trials))
     win_count = int(results.get("win_ok_count") or round(win_rate * trials))
     dist = results.get("first_win_turn_dist") or {}
+    max_win_turn = results.get("max_win_turn")
+    delta = results.get("avg_to_max_delta_capped")
     avg_win_turn = None
     if dist:
         total = sum(int(v) for v in dist.values())
@@ -217,7 +219,9 @@ def main() -> int:
         f"{_bold('Results', color)} - "
         f"Draw By({args.draw_by}): {_pct(draw_rate, color)} "
         f"Win By({args.win_by}): {_pct(win_rate, color)} "
-        f"Avg Win Turn: {avg_str}"
+        f"Avg Win Turn: {avg_str} "
+        f"Max Win Turn: {max_win_turn} "
+        f"Delta: {delta} "
     )
     print("")  # blank line
 

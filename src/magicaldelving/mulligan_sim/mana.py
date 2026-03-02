@@ -8,6 +8,43 @@ from .models import GameState
 from .tokens import estimate_tokens_created_from_text
 
 
+def _oracle_lc(idx: CardIndex, name: str) -> str:
+    f = idx.facts(name)
+    return (f.oracle_text or "").lower() if f else ""
+
+
+def _is_x10_haste_pump_finisher(idx: CardIndex, name: str) -> bool:
+    """
+    Detect Finale-of-Devastation-like text:
+      "If X is 10 or more, creatures you control get +X/+X and gain haste until end of turn."
+    """
+    txt = _oracle_lc(idx, name)
+    return (
+            ("if x is 10 or more" in txt)
+            and ("creatures you control get +x/+x" in txt or "creatures you control get +x/+x" in txt)
+            and ("gain haste" in txt)
+    )
+
+
+def _is_greatest_power_trample_pump(idx: CardIndex, name: str) -> bool:
+    """
+    Detect Overwhelming-Stampede-like text:
+      "Until end of turn, creatures you control gain trample and get +X/+X where X is the greatest power among creatures you control."
+    """
+    txt = _oracle_lc(idx, name)
+    return ("gain trample" in txt) and ("get +x/+x" in txt) and ("greatest power" in txt)
+
+
+def _is_finisher_like(idx: CardIndex, name: str) -> bool:
+    txt = _oracle_lc(idx, name)
+    if "Finisher" in idx.roles(name):
+        return True
+    # oracle-driven finishers we currently model
+    return _is_x10_haste_pump_finisher(idx, name) or _is_greatest_power_trample_pump(idx, name) or (
+            ("creatures you control get +" in txt) and ("until end of turn" in txt)
+    )
+
+
 def has_creature_tap_mana_enabler(st: GameState, idx: CardIndex) -> bool:
     """True if any permanent grants creatures a tap-for-mana ability."""
     for p in st.iter_permanents():
@@ -49,8 +86,6 @@ def compute_creature_tap_mana_pool(st: GameState, idx: CardIndex) -> Tuple[List[
     token_count = 0
     if blanket:
         token_count = st.token_pool
-        # no global haste => tokens created this turn can't tap
-        # (we treat "finisher_haste" as global haste for this sim)
         if not st.finisher_haste:
             token_count = max(0, token_count - st.tokens_created_this_turn)
 
@@ -124,8 +159,8 @@ def default_cast_policy(
         )
 
     def eff_cost(card: str, mana_total: int) -> int:
-        name = (card or "").strip().lower()
-        if name == "finale of devastation":
+        # If it's an X>=10 haste finisher, only "cast" it at the finisher threshold.
+        if _is_x10_haste_pump_finisher(idx, card):
             return 12 if mana_total >= 12 else 10_000
         return int(idx.mv(card))
 
@@ -182,7 +217,6 @@ def default_cast_policy(
             break
 
         def prio(c: str):
-            name = (c or "").strip().lower()
             if has_role_name(c, "Ramp"):
                 return (1, idx.mv(c))
             if has_role_name(c, "DrawEngine"):
@@ -191,13 +225,14 @@ def default_cast_policy(
                 return (3, idx.mv(c))
             if has_role_name(c, "TokenMaker") or has_role_name(c, "TokenBurst"):
                 return (4, idx.mv(c))
-            if name in ("overwhelming stampede", "finale of devastation") or has_role_name(c, "Finisher"):
+            if _is_finisher_like(idx, c):
                 return (5, idx.mv(c))
+            if has_role_name(c, "Wincon"):
+                return (6, idx.mv(c))
             return (9, idx.mv(c))
 
         castable.sort(key=prio)
         c = castable[0]
-        name = (c or "").strip().lower()
         cost = eff_cost(c, total)
 
         if not pay(cost):
@@ -218,7 +253,6 @@ def default_cast_policy(
             roles = idx.roles_for_perm(new_perm) if new_perm else idx.roles(c)
             if ("ManaDork" not in roles) and ("CreatureTapManaEnabler" not in roles) and ("BurstManaFromCreatures" not in roles):
                 st.ramp_sources_in_play += 1
-                # artifact ramp can be used immediately
                 if new_perm is not None and idx.is_artifact_perm(new_perm) and (not idx.is_creature_perm(new_perm)) and (not idx.is_land_perm(new_perm)):
                     available_mana += 1
 
@@ -236,18 +270,17 @@ def default_cast_policy(
                 st.token_pool += created
                 st.tokens_created_this_turn += created
 
-        # Finale finisher mode (X>=10)
-        if name == "finale of devastation":
+        # Finisher effects (oracle-driven)
+        if _is_x10_haste_pump_finisher(idx, c):
             st.finisher_boost = max(st.finisher_boost, 10)
             st.finisher_haste = True
 
-        # Stampede
-        if name == "overwhelming stampede":
+        if _is_greatest_power_trample_pump(idx, c):
             x = max_creature_power(st, idx)
             st.finisher_boost = max(st.finisher_boost, x)
             st.finisher_trample = True
 
-        # Generic finisher spell
+        # Generic finisher spell (tagged): modest boost
         if has_role_name(c, "Finisher") and f and (f.is_instant or f.is_sorcery):
             st.finisher_boost = max(st.finisher_boost, 3)
 
