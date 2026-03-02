@@ -45,17 +45,32 @@ class CardIndex:
         return f.face_oracle_text(perm.face) if f else ""
 
     def type_line_for_perm(self, perm: Permanent) -> str:
-        f = self.facts_for_perm(perm)
-        return f.face_type_line(perm.face) if f else ""
+        # Cards: printed type line. Tokens: synthesize from current types/subtypes.
+        if perm.is_card:
+            f = self.facts_for_perm(perm)
+            return f.face_type_line(perm.face) if f else ""
+        tl = " ".join(sorted(perm.types))
+        if perm.subtypes:
+            tl += " — " + " ".join(sorted(perm.subtypes))
+        return tl
+
+    def _has_type(self, perm: Permanent, type_name: str) -> bool:
+        if type_name in perm.type_overrides_remove:
+            return False
+        if type_name in perm.type_overrides_add:
+            return True
+        if not perm.is_card:
+            return type_name in perm.types
+        return type_name in self.type_line_for_perm(perm)
 
     def is_creature_perm(self, perm: Permanent) -> bool:
-        return "Creature" in self.type_line_for_perm(perm)
+        return self._has_type(perm, "Creature")
 
     def is_land_perm(self, perm: Permanent) -> bool:
-        return "Land" in self.type_line_for_perm(perm)
+        return self._has_type(perm, "Land")
 
     def is_artifact_perm(self, perm: Permanent) -> bool:
-        return "Artifact" in self.type_line_for_perm(perm)
+        return self._has_type(perm, "Artifact")
 
     def roles_for_perm(self, perm: Permanent) -> Set[str]:
         """Roles adjusted for the current face (for transform / modal cards)."""
@@ -68,7 +83,6 @@ class CardIndex:
         has_enabler = face_has_creature_tap_mana_enabler(f, perm.face)
         has_burst = face_has_burst_from_creatures(f, perm.face)
 
-        # Reset these roles based on this face.
         for r in ("CreatureTapManaEnabler", "BurstManaFromCreatures", "ManaDork", "ManaRock"):
             base.discard(r)
 
@@ -77,10 +91,9 @@ class CardIndex:
         if has_burst:
             base.add("BurstManaFromCreatures")
         if has_tap:
-            tl = self.type_line_for_perm(perm)
-            if "Creature" in tl:
+            if self.is_creature_perm(perm):
                 base.add("ManaDork")
-            if "Artifact" in tl:
+            if self.is_artifact_perm(perm):
                 base.add("ManaRock")
 
         return base

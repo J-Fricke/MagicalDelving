@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import re
 from typing import List, Tuple
 
-from .combat import can_use_creature_this_turn, max_creature_power
 from .index import CardIndex
-from .models import GameState
+from .models import GameState, Permanent
 from .tokens import estimate_tokens_created_from_text
+
+
+_MANA_SYMBOL_RE = re.compile(r"\{([^}]+)\}")
 
 
 def _oracle_lc(idx: CardIndex, name: str) -> str:
@@ -19,11 +22,7 @@ def _is_x10_haste_pump_finisher(idx: CardIndex, name: str) -> bool:
       "If X is 10 or more, creatures you control get +X/+X and gain haste until end of turn."
     """
     txt = _oracle_lc(idx, name)
-    return (
-            ("if x is 10 or more" in txt)
-            and ("creatures you control get +x/+x" in txt or "creatures you control get +x/+x" in txt)
-            and ("gain haste" in txt)
-    )
+    return ("if x is 10 or more" in txt) and ("creatures you control get +x/+x" in txt) and ("gain haste" in txt)
 
 
 def _is_greatest_power_trample_pump(idx: CardIndex, name: str) -> bool:
@@ -39,11 +38,129 @@ def _is_finisher_like(idx: CardIndex, name: str) -> bool:
     txt = _oracle_lc(idx, name)
     if "Finisher" in idx.roles(name):
         return True
-    # oracle-driven finishers we currently model
     return _is_x10_haste_pump_finisher(idx, name) or _is_greatest_power_trample_pump(idx, name) or (
             ("creatures you control get +" in txt) and ("until end of turn" in txt)
     )
 
+
+# ---------------------------
+# Qty-aware split/tap helpers
+# ---------------------------
+
+def _take_units(st: GameState, pid: int, n: int) -> int:
+    """
+    Ensure there is a battlefield entry representing exactly n units from pid.
+    Returns the pid of that extracted group (may be the original pid).
+    """
+    p = st.battlefield[pid]
+    n = int(n)
+    if n <= 0:
+        raise ValueError("n must be > 0")
+    if n > p.qty:
+        raise ValueError("not enough quantity")
+    if n == p.qty:
+        return pid
+    return st.split_permanent(pid, n)
+
+
+def _tap_units(st: GameState, pid: int, n: int = 1) -> int:
+    """
+    Tap n units from pid (splitting if needed). Returns the pid of the tapped group.
+    """
+    tapped_pid = _take_units(st, pid, n)
+    st.battlefield[tapped_pid].tapped = True
+    return tapped_pid
+
+
+# ---------------------------
+# Token creation (minimal creature-token parser)
+# ---------------------------
+
+_CREATURE_TOKEN_RE = re.compile(
+    r"create\s+(?:a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+"
+    r"(?:tapped\s+and\s+attacking\s+)?"
+    r"(\d+)\/(\d+)\s+([^\.]+?)\s+token",
+    re.IGNORECASE,
+)
+
+_WITH_KW = {
+    "flying": "Flying",
+    "trample": "Trample",
+    "haste": "Haste",
+    "double strike": "DoubleStrike",
+    "vigilance": "Vigilance",
+    "menace": "Menace",
+    "first strike": "FirstStrike",
+    "deathtouch": "Deathtouch",
+    "lifelink": "Lifelink",
+}
+
+
+def _add_generic_creature_tokens(st: GameState, idx: CardIndex, source_oracle: str, count: int) -> None:
+    """
+    Best-effort creature token creation.
+    If parsing fails, creates 0/0 Creature tokens (so it "fails gracefully" without inventing stats).
+    """
+    txt = (source_oracle or "").lower()
+    m = _CREATURE_TOKEN_RE.search(txt)
+
+    # defaults (fail gracefully)
+    pwr, tgh = 0, 0
+    types = {"Creature"}
+    subtypes = set()
+    keywords = set()
+    tapped_on_entry = "tapped" in txt and "create" in txt  # coarse
+
+    if m:
+        try:
+            pwr = int(m.group(1))
+            tgh = int(m.group(2))
+        except Exception:
+            pwr, tgh = 0, 0
+
+        desc = (m.group(3) or "").strip()
+        # figure out if it's "artifact creature" etc
+        if "artifact" in desc:
+            types.add("Artifact")
+        if "enchantment" in desc:
+            types.add("Enchantment")
+
+        # grab words before "creature" as candidate subtypes (drop color words)
+        color_words = {"white", "blue", "black", "red", "green", "colorless"}
+        words = [w for w in re.split(r"\s+", desc) if w and w not in color_words]
+        if "creature" in words:
+            i = words.index("creature")
+            # subtype words are typically between color and "creature"
+            for w in words[:i]:
+                # skip "artifact"/"enchantment"/"token"
+                if w in {"artifact", "enchantment", "token"}:
+                    continue
+                subtypes.add(w.capitalize())
+
+        # keywords: "with flying", "with trample", etc.
+        for k, K in _WITH_KW.items():
+            if f"with {k}" in txt:
+                keywords.add(K)
+
+        tapped_on_entry = "tapped" in txt and "create" in txt
+
+    token_name = "Creature Token"
+    new_pid = st.add_permanent(token_name, entered_turn=st.turn, face=0, is_card=False, qty=count)
+    tp = st.battlefield[new_pid]
+    tp.types = set(types)
+    tp.subtypes = set(subtypes)
+    tp.keywords = set(keywords)
+    tp.base_power = pwr
+    tp.base_toughness = tgh
+    tp.power = pwr
+    tp.toughness = tgh
+    tp.tapped = bool(tapped_on_entry)
+    tp.sick = True  # tokens entered this turn
+
+
+# ---------------------------
+# Creature-tap + burst mana pools
+# ---------------------------
 
 def has_creature_tap_mana_enabler(st: GameState, idx: CardIndex) -> bool:
     """True if any permanent grants creatures a tap-for-mana ability."""
@@ -53,60 +170,62 @@ def has_creature_tap_mana_enabler(st: GameState, idx: CardIndex) -> bool:
     return False
 
 
-def compute_creature_tap_mana_pool(st: GameState, idx: CardIndex) -> Tuple[List[int], int]:
-    """Return (creature_perm_ids, token_count) available for 1-mana taps.
+def compute_creature_tap_mana_pool(st: GameState, idx: CardIndex) -> List[Tuple[int, int, int]]:
+    """
+    Return a list of (power, pid, available_qty) for 1-mana taps.
 
-    - If a CreatureTapManaEnabler is present: any *ready* creature can tap for 1.
-    - Otherwise: only *ready* ManaDorks can tap for 1.
+    - If a CreatureTapManaEnabler is present: any untapped creature can tap for 1.
+    - Otherwise: only untapped ManaDorks can tap for 1.
 
-    We return creature ids sorted by power ascending so we tap low-power bodies first.
+    Sorted by power ascending so we tap low-power bodies first.
     """
     blanket = has_creature_tap_mana_enabler(st, idx)
 
-    pool: List[Tuple[int, int]] = []  # (power, pid)
+    pool: List[Tuple[int, int, int]] = []  # (power, pid, qty)
     for pid, p in st.battlefield.items():
         if not idx.is_creature_perm(p):
             continue
         if p.tapped:
             continue
-        if not can_use_creature_this_turn(st, idx, p):
+
+        # For mana abilities with {T}, summoning sickness applies unless haste.
+        # We use p.can_tap(st) as the standard predicate.
+        if not p.can_tap(st):
             continue
 
         roles = idx.roles_for_perm(p)
+
+        # Avoid double-counting burst tap sources as 1-mana dorks.
+        if "BurstManaFromCreatures" in roles:
+            continue
+
         if (not blanket) and ("ManaDork" not in roles):
             continue
 
         f = idx.facts(p.name)
-        power = int(f.power) if (f and f.power is not None) else 2
-        pool.append((max(0, power), pid))
+        power = int(f.power) if (f and f.power is not None and str(f.power).isdigit()) else p.power_int()
+        pool.append((max(0, power), pid, p.qty))
 
     pool.sort(key=lambda x: x[0])
-    creature_ids = [pid for _, pid in pool]
-
-    token_count = 0
-    if blanket:
-        token_count = st.token_pool
-        if not st.finisher_haste:
-            token_count = max(0, token_count - st.tokens_created_this_turn)
-
-    return creature_ids, token_count
+    return pool
 
 
-def compute_burst_mana_pools(st: GameState, idx: CardIndex) -> Tuple[List[Tuple[int, int]], List[Tuple[int, int]]]:
-    """Return (land_like_sources, creature_sources) for BurstManaFromCreatures.
+def compute_burst_mana_pools(st: GameState, idx: CardIndex) -> Tuple[List[Tuple[int, int, int]], List[Tuple[int, int, int]]]:
+    """
+    Return (land_like_sources, creature_sources) for BurstManaFromCreatures.
 
-    Each entry: (mana_amount, perm_id).
+    Each entry: (mana_amount, pid, available_qty).
     Amount computed from oracle text:
       - "for each creature you control" => X = total creatures
       - "other creatures you control" => X = total creatures - 1
     """
-    total_creatures = st.token_pool
+    total_creatures = 0
     for p in st.iter_permanents():
         if idx.is_creature_perm(p):
-            total_creatures += 1
+            total_creatures += p.qty
 
-    land_sources: List[Tuple[int, int]] = []
-    creature_sources: List[Tuple[int, int]] = []
+    land_sources: List[Tuple[int, int, int]] = []
+    creature_sources: List[Tuple[int, int, int]] = []
 
     for pid, p in st.battlefield.items():
         if p.tapped:
@@ -114,36 +233,40 @@ def compute_burst_mana_pools(st: GameState, idx: CardIndex) -> Tuple[List[Tuple[
         if "BurstManaFromCreatures" not in idx.roles_for_perm(p):
             continue
 
-        if idx.is_creature_perm(p) and not can_use_creature_this_turn(st, idx, p):
+        # If this burst source is a creature with {T}, summoning sickness matters.
+        if idx.is_creature_perm(p) and not p.can_tap(st):
             continue
 
         txt = (idx.oracle_for_perm(p) or "").lower()
         x = total_creatures
         if "other creatures you control" in txt:
-            x = max(0, total_creatures - 1)
+            x = max(0, total_creatures - p.qty)
 
         if x <= 0:
             continue
 
         if idx.is_creature_perm(p):
-            creature_sources.append((x, pid))
+            creature_sources.append((x, pid, p.qty))
         else:
-            land_sources.append((x, pid))
+            land_sources.append((x, pid, p.qty))
 
     land_sources.sort(key=lambda t: t[0], reverse=True)
     creature_sources.sort(key=lambda t: t[0], reverse=True)
     return land_sources, creature_sources
 
 
+# ---------------------------
+# Default cast policy
+# ---------------------------
+
 def default_cast_policy(
         st: GameState,
         idx: CardIndex,
         available_mana: int,
-        tap_creature_ids: List[int],
-        tap_tokens: int,
-        burst_land_sources: List[Tuple[int, int]],
-        burst_creature_sources: List[Tuple[int, int]],
-) -> Tuple[int, List[int], int, List[Tuple[int, int]], List[Tuple[int, int]]]:
+        tap_creature_pool: List[Tuple[int, int, int]],
+        burst_land_sources: List[Tuple[int, int, int]],
+        burst_creature_sources: List[Tuple[int, int, int]],
+) -> Tuple[int, List[Tuple[int, int, int]], List[Tuple[int, int, int]], List[Tuple[int, int, int]]]:
     """Generic casting policy with creature-tap + burst mana."""
 
     def has_role_name(name: str, role: str) -> bool:
@@ -152,39 +275,43 @@ def default_cast_policy(
     def mana_now() -> int:
         return (
                 available_mana
-                + len(tap_creature_ids)
-                + tap_tokens
-                + sum(x for x, _ in burst_land_sources)
-                + sum(x for x, _ in burst_creature_sources)
+                + sum(qty for _pw, _pid, qty in tap_creature_pool)
+                + sum(x * qty for x, _pid, qty in burst_land_sources)
+                + sum(x * qty for x, _pid, qty in burst_creature_sources)
         )
 
     def eff_cost(card: str, mana_total: int) -> int:
-        # If it's an X>=10 haste finisher, only "cast" it at the finisher threshold.
         if _is_x10_haste_pump_finisher(idx, card):
             return 12 if mana_total >= 12 else 10_000
         return int(idx.mv(card))
 
-    def _tap_perm(pid: int) -> None:
-        p = st.battlefield.get(pid)
-        if p:
-            p.tapped = True
-
     def pay(cost: int) -> bool:
-        nonlocal available_mana, tap_creature_ids, tap_tokens, burst_land_sources, burst_creature_sources
+        nonlocal available_mana, tap_creature_pool, burst_land_sources, burst_creature_sources
 
         # Tap burst sources first (big chunks)
         while available_mana < cost and (burst_land_sources or burst_creature_sources):
             if burst_land_sources:
-                x, pid = burst_land_sources.pop(0)
+                x, pid, qty = burst_land_sources[0]
+                _tap_units(st, pid, 1)
                 available_mana += x
-                _tap_perm(pid)
                 st.burst_lands_tapped += 1
+                qty -= 1
+                if qty <= 0:
+                    burst_land_sources.pop(0)
+                else:
+                    burst_land_sources[0] = (x, pid, qty)
                 continue
+
             if burst_creature_sources:
-                x, pid = burst_creature_sources.pop(0)
+                x, pid, qty = burst_creature_sources[0]
+                _tap_units(st, pid, 1)
                 available_mana += x
-                _tap_perm(pid)
                 st.burst_creatures_tapped += 1
+                qty -= 1
+                if qty <= 0:
+                    burst_creature_sources.pop(0)
+                else:
+                    burst_creature_sources[0] = (x, pid, qty)
                 continue
 
         if cost <= available_mana:
@@ -194,19 +321,18 @@ def default_cast_policy(
         need = cost - available_mana
         available_mana = 0
 
-        # Tap 1-mana creatures
-        while need > 0 and tap_creature_ids:
-            pid = tap_creature_ids.pop(0)
-            _tap_perm(pid)
+        # Tap 1-mana creatures (low power first)
+        i = 0
+        while need > 0 and i < len(tap_creature_pool):
+            pw, pid, qty = tap_creature_pool[i]
+            _tap_units(st, pid, 1)
             st.creatures_tapped_for_mana += 1
             need -= 1
-
-        # Tap tokens
-        if need > 0 and tap_tokens > 0:
-            use_tok = min(need, tap_tokens)
-            tap_tokens -= use_tok
-            st.tokens_tapped_for_mana += use_tok
-            need -= use_tok
+            qty -= 1
+            if qty <= 0:
+                tap_creature_pool.pop(i)
+            else:
+                tap_creature_pool[i] = (pw, pid, qty)
 
         return need <= 0
 
@@ -243,10 +369,17 @@ def default_cast_policy(
         f = idx.facts(c)
         is_perm = bool(f and not (f.is_instant or f.is_sorcery))
 
-        new_perm = None
+        new_perm: Permanent | None = None
         if is_perm:
-            new_pid = st.add_permanent(c, entered_turn=st.turn, face=0)
+            new_pid = st.add_permanent(c, entered_turn=st.turn, face=0, is_card=True, qty=1)
             new_perm = st.battlefield.get(new_pid)
+
+            # Optional: seed types/subtypes from facts type line for better method behavior later.
+            # (Safe even if you don't use it yet.)
+            tl = (idx.type_line_for_perm(new_perm) if new_perm else "") if hasattr(idx, "type_line_for_perm") else ""
+            if new_perm and tl:
+                parts = tl.replace("—", " ").replace("-", " ").split()
+                new_perm.types = {w for w in parts if w[:1].isalpha()}
 
         # Ramp: only increment static sources for non-dorks, non-enablers, non-burst.
         if has_role_name(c, "Ramp"):
@@ -263,12 +396,11 @@ def default_cast_policy(
                 if st.library:
                     st.hand.append(st.library.pop(0))
 
-        # Tokens (rough)
+        # Tokens (now as permanents)
         if (has_role_name(c, "TokenBurst") or has_role_name(c, "TokenMaker")) and f:
             created = estimate_tokens_created_from_text(f.oracle_text)
             if created > 0:
-                st.token_pool += created
-                st.tokens_created_this_turn += created
+                _add_generic_creature_tokens(st, idx, f.oracle_text, created)
 
         # Finisher effects (oracle-driven)
         if _is_x10_haste_pump_finisher(idx, c):
@@ -276,7 +408,7 @@ def default_cast_policy(
             st.finisher_haste = True
 
         if _is_greatest_power_trample_pump(idx, c):
-            x = max_creature_power(st, idx)
+            x = st.max_creature_power()
             st.finisher_boost = max(st.finisher_boost, x)
             st.finisher_trample = True
 
@@ -284,4 +416,4 @@ def default_cast_policy(
         if has_role_name(c, "Finisher") and f and (f.is_instant or f.is_sorcery):
             st.finisher_boost = max(st.finisher_boost, 3)
 
-    return available_mana, tap_creature_ids, tap_tokens, burst_land_sources, burst_creature_sources
+    return available_mana, tap_creature_pool, burst_land_sources, burst_creature_sources
