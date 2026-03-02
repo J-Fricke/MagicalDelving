@@ -46,6 +46,11 @@ def _faces(card_json: Dict[str, Any]) -> Tuple[Dict[str, Any], ...]:
     return (card_json,)
 
 
+def num_faces(self) -> int:
+    parts = [p.strip() for p in (self.oracle_text or "").split("\n//\n") if p.strip()]
+    return max(1, len(parts))
+
+
 def _join_face_field(card_json: Dict[str, Any], field: str) -> str:
     vals = []
     for f in _faces(card_json):

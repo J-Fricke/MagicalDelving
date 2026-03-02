@@ -13,6 +13,7 @@ from .mana import (
 )
 from .models import GameState, SimConfig, SimGoals
 from .mulligan import london_mulligan
+from .transform import apply_end_step, apply_first_main, apply_upkeep
 from .win import has_wincon_resolved
 
 
@@ -43,7 +44,7 @@ def run_sim(
         for turn in range(1, cfg.max_turns + 1):
             st.turn = turn
 
-            # ---- untap + per-turn reset ----
+            # untap + reset per-turn flags
             for p in st.iter_permanents():
                 p.tapped = False
 
@@ -55,10 +56,17 @@ def run_sim(
             st.tokens_tapped_for_mana = 0
             st.burst_creatures_tapped = 0
             st.burst_lands_tapped = 0
+            st.attackers_this_turn = 0
+
+            # upkeep transforms
+            apply_upkeep(st, card_index)
 
             # draw step (EDH draws on T1)
             if st.library:
                 st.hand.append(st.library.pop(0))
+
+            # first main transforms (important for “flip before you make mana”)
+            apply_first_main(st, card_index)
 
             # land drop
             for c in list(st.hand):
@@ -67,9 +75,6 @@ def run_sim(
                     pid = st.add_permanent(c, entered_turn=st.turn, face=0)
                     p = st.battlefield[pid]
 
-                    # Count "normal" lands as +1 static mana.
-                    # Land-creatures (e.g., Dryad Arbor) are handled via ManaDork logic / sickness.
-                    # Burst lands (Cradle/Itlimoc) are handled via BurstManaFromCreatures.
                     is_land = card_index.is_land_perm(p)
                     is_creature = card_index.is_creature_perm(p)
                     is_burst = "BurstManaFromCreatures" in card_index.roles_for_perm(p)
@@ -97,10 +102,7 @@ def run_sim(
             # mana: static first (normal lands + static ramp count)
             available_mana = st.lands_in_play + st.ramp_sources_in_play
 
-            # 1-mana taps (dorks OR blanket enabler)
             tap_creature_ids, tap_tokens = compute_creature_tap_mana_pool(st, card_index)
-
-            # burst mana taps (Cradle/Itlimoc/Brigid-back style)
             burst_land_sources, burst_creature_sources = compute_burst_mana_pools(st, card_index)
 
             available_mana, tap_creature_ids, tap_tokens, burst_land_sources, burst_creature_sources = default_cast_policy(
@@ -137,6 +139,12 @@ def run_sim(
             if st.cumulative_damage >= goals.damage_threshold:
                 win_turn = turn
                 break
+
+            # end step transforms (Growing Rites / Wedding Announcement counters / etc.)
+            apply_end_step(st, card_index)
+
+            # record for next-turn “last turn” checks
+            st.attackers_last_turn = st.attackers_this_turn
 
         if win_turn is not None:
             first_win_turns.append(win_turn)

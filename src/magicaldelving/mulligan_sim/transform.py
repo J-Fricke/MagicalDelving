@@ -16,14 +16,14 @@ def global_haste_online(st: GameState, idx: CardIndex) -> bool:
 
 def is_hasty_creature(p: Permanent, idx: CardIndex) -> bool:
     # treat as creature if either rules say so OR deck logic marked it so this turn
-    if not (idx.is_creature_perm(p) or getattr(p, "is_creature_this_turn", False)):
+    if not (idx.is_creature_perm(p) or p.is_creature_this_turn):
         return False
     return "haste" in (idx.oracle_for_perm(p) or "").lower()
 
 
 def can_use_creature_this_turn(st: GameState, idx: CardIndex, p: Permanent) -> bool:
     """Eligibility for tap/attack this turn (summoning sickness + haste)."""
-    if not (idx.is_creature_perm(p) or getattr(p, "is_creature_this_turn", False)):
+    if not (idx.is_creature_perm(p) or p.is_creature_this_turn):
         return False
 
     haste_all = global_haste_online(st, idx) or st.finisher_haste
@@ -35,16 +35,15 @@ def can_use_creature_this_turn(st: GameState, idx: CardIndex, p: Permanent) -> b
 def attackable_creature_powers(st: GameState, idx: CardIndex) -> List[int]:
     powers: List[int] = []
     for p in st.iter_permanents():
-        if not (idx.is_creature_perm(p) or getattr(p, "is_creature_this_turn", False)):
+        if not (idx.is_creature_perm(p) or p.is_creature_this_turn):
             continue
         if p.tapped:
             continue
         if not can_use_creature_this_turn(st, idx, p):
             continue
 
-        override = getattr(p, "attack_power_override_this_turn", None)
-        if override is not None:
-            powers.append(max(0, int(override)))
+        if p.attack_power_override_this_turn is not None:
+            powers.append(max(0, int(p.attack_power_override_this_turn)))
             continue
 
         f = idx.facts(p.name)
@@ -61,12 +60,11 @@ def attackable_tokens(st: GameState, idx: CardIndex) -> int:
 def max_creature_power(st: GameState, idx: CardIndex) -> int:
     mx = 1 if st.token_pool > 0 else 0
     for p in st.iter_permanents():
-        if not (idx.is_creature_perm(p) or getattr(p, "is_creature_this_turn", False)):
+        if not (idx.is_creature_perm(p) or p.is_creature_this_turn):
             continue
 
-        override = getattr(p, "attack_power_override_this_turn", None)
-        if override is not None:
-            mx = max(mx, int(override))
+        if p.attack_power_override_this_turn is not None:
+            mx = max(mx, int(p.attack_power_override_this_turn))
             continue
 
         f = idx.facts(p.name)
@@ -75,28 +73,19 @@ def max_creature_power(st: GameState, idx: CardIndex) -> int:
 
 
 def evaluate_damage_this_turn(st: GameState, idx: CardIndex) -> int:
-    """
-    Computes this-turn combat damage contribution and records st.attackers_this_turn
-    (used by transform logic such as "attacked with N creatures").
-    """
     def battlefield_has(role: str) -> bool:
         return any(role in idx.roles_for_perm(p) for p in st.iter_permanents())
 
     powers = attackable_creature_powers(st, idx)
     creature_power = sum(powers)
 
-    # Tokens: subtract those tapped for mana this turn (mana.py increments tokens_tapped_for_mana)
     tok = max(0, attackable_tokens(st, idx) - st.tokens_tapped_for_mana)
-
     attackers = len(powers) + tok
-    st.attackers_this_turn = attackers  # <-- important for transform rules
-
     if attackers <= 0:
         return 0
 
     nominal = creature_power + tok
 
-    # Beastmaster Ascension approx (+5/+5 if >=7 attackers)
     ascension_on_board = any((p.name or "").strip().lower() == "beastmaster ascension" for p in st.iter_permanents())
     ascension_active = ascension_on_board and attackers >= 7
     boost = st.finisher_boost + (5 if ascension_active else 0)
