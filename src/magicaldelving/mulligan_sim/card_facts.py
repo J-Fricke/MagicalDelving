@@ -2,7 +2,13 @@ from __future__ import annotations
 from typing import Iterable
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Set, Tuple
+import re
 
+_TAP_ADD_RE = re.compile(r"\{t\}:\s*add\b")
+_TAP_ADD_X_OTHER_CREATURES_RE = re.compile(
+    r"\{t\}:\s*add\s+x\s+mana.*other\s+creatures\s+you\s+control",
+    re.IGNORECASE | re.DOTALL,
+    )
 
 def _coerce_int(s: Any) -> Optional[int]:
     try:
@@ -239,6 +245,16 @@ def infer_roles(facts: CardFacts) -> Set[str]:
             roles.add("TokenBurst")
         else:
             roles.add("TokenMaker")
+
+    # Creature-tap mana enablers (Cryptolith Rite / Enduring Vitality style)
+    # Look for: "creatures you control have '{T}: Add ...'"
+    if "creatures you control have" in txt and _TAP_ADD_RE.search(txt):
+        roles.add("CreatureTapManaEnabler")
+
+    # Burst mana from tapping a single creature based on other creatures (Brigid-back style)
+    # Look for: "{T}: Add X mana ... where X is the number of other creatures you control"
+    if _TAP_ADD_X_OTHER_CREATURES_RE.search(facts.oracle_text or ""):
+        roles.add("BurstManaFromCreatures")
 
     return roles
 
