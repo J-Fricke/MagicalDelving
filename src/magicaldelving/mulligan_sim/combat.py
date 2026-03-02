@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional, Tuple
 
 from .index import CardIndex
 from .models import GameState, Permanent
@@ -15,15 +15,17 @@ def global_haste_online(st: GameState, idx: CardIndex) -> bool:
 
 
 def is_hasty_creature(p: Permanent, idx: CardIndex) -> bool:
-    if not idx.is_creature_perm(p):
+    # treat as creature if either rules say so OR deck logic marked it so this turn
+    if not (idx.is_creature_perm(p) or p.is_creature_this_turn):
         return False
     return "haste" in (idx.oracle_for_perm(p) or "").lower()
 
 
 def can_use_creature_this_turn(st: GameState, idx: CardIndex, p: Permanent) -> bool:
     """Eligibility for tap/attack this turn (summoning sickness + haste)."""
-    if not idx.is_creature_perm(p):
+    if not (idx.is_creature_perm(p) or p.is_creature_this_turn):
         return False
+
     haste_all = global_haste_online(st, idx) or st.finisher_haste
     if p.entered_turn >= st.turn:
         return bool(haste_all or is_hasty_creature(p, idx))
@@ -33,11 +35,15 @@ def can_use_creature_this_turn(st: GameState, idx: CardIndex, p: Permanent) -> b
 def attackable_creature_powers(st: GameState, idx: CardIndex) -> List[int]:
     powers: List[int] = []
     for p in st.iter_permanents():
-        if not idx.is_creature_perm(p):
+        if not (idx.is_creature_perm(p) or p.is_creature_this_turn):
             continue
         if p.tapped:
             continue
         if not can_use_creature_this_turn(st, idx, p):
+            continue
+
+        if p.attack_power_override_this_turn is not None:
+            powers.append(max(0, int(p.attack_power_override_this_turn)))
             continue
 
         f = idx.facts(p.name)
@@ -54,8 +60,13 @@ def attackable_tokens(st: GameState, idx: CardIndex) -> int:
 def max_creature_power(st: GameState, idx: CardIndex) -> int:
     mx = 1 if st.token_pool > 0 else 0
     for p in st.iter_permanents():
-        if not idx.is_creature_perm(p):
+        if not (idx.is_creature_perm(p) or p.is_creature_this_turn):
             continue
+
+        if p.attack_power_override_this_turn is not None:
+            mx = max(mx, int(p.attack_power_override_this_turn))
+            continue
+
         f = idx.facts(p.name)
         mx = max(mx, int(f.power) if (f and f.power is not None) else 2)
     return mx
@@ -97,3 +108,25 @@ def evaluate_damage_this_turn(st: GameState, idx: CardIndex) -> int:
         through += int(through * 0.70 * extra)
 
     return max(0, through)
+
+
+def tablekill_step(
+        st: GameState,
+        idx: CardIndex,
+        combat_total: int,
+        *,
+        win_by_turn: int = 8,
+        threshold: int = 120,
+        turn_hit_120: Optional[int] = None,
+) -> Tuple[int, bool, Optional[int]]:
+    """
+    Call once per turn AFTER you update st for that turn.
+    Returns: (new_combat_total, tablekill_by_win_by_turn, turn_hit_120)
+    """
+    combat_total += evaluate_damage_this_turn(st, idx)
+
+    if combat_total >= threshold and turn_hit_120 is None:
+        turn_hit_120 = st.turn
+
+    tablekill_by_target_turn = (turn_hit_120 is not None) and (turn_hit_120 <= win_by_turn)
+    return combat_total, tablekill_by_target_turn, turn_hit_120

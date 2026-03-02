@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -36,6 +35,10 @@ class Permanent:
 
     # Aura names attached (rough for now)
     auras: List[str] = field(default_factory=list)
+
+    # --- NEW: per-turn combat projection knobs (deck logic can set these) ---
+    is_creature_this_turn: bool = False
+    attack_power_override_this_turn: Optional[int] = None
 
 
 @dataclass
