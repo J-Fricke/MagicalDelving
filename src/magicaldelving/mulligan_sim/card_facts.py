@@ -4,11 +4,25 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, Set, Tuple
 import re
 
-_TAP_ADD_RE = re.compile(r"\{t\}:\s*add\b")
-_TAP_ADD_X_OTHER_CREATURES_RE = re.compile(
-    r"\{t\}:\s*add\s+x\s+mana.*other\s+creatures\s+you\s+control",
+# NOTE: These heuristics are intentionally permissive. We prefer false positives
+# in *role discovery* and then rely on the sim's constraints (summoning sickness,
+# tap-vs-attack tension, etc.) to keep results reasonable.
+
+_TAP_ADD_RE = re.compile(r"\{t\}:\s*add\b", re.IGNORECASE)
+
+# "Creatures you control have '{T}: Add ...'" (Cryptolith Rite / Enduring Vitality / etc.)
+_CREATURES_HAVE_TAP_ADD_RE = re.compile(
+    r"creatures\s+you\s+control\s+have.*\{t\}:\s*add\b",
     re.IGNORECASE | re.DOTALL,
     )
+
+# "{T}: Add ... for each creature you control" (Gaea's Cradle / Itlimoc-style)
+# OR "{T}: Add X ... where X is the number of (other) creatures you control" (Brigid-back style)
+_BURST_FROM_CREATURES_RE = re.compile(
+    r"\{t\}:\s*add\s+.*(for\s+each\s+(other\s+)?creature\s+you\s+control|where\s+x\s+is\s+the\s+number\s+of\s+(other\s+)?creatures\s+you\s+control)",
+    re.IGNORECASE | re.DOTALL,
+    )
+
 
 def _coerce_int(s: Any) -> Optional[int]:
     try:
@@ -248,12 +262,18 @@ def infer_roles(facts: CardFacts) -> Set[str]:
 
     # Creature-tap mana enablers (Cryptolith Rite / Enduring Vitality style)
     # Look for: "creatures you control have '{T}: Add ...'"
-    if "creatures you control have" in txt and _TAP_ADD_RE.search(txt):
+    if _CREATURES_HAVE_TAP_ADD_RE.search(facts.oracle_text or ""):
         roles.add("CreatureTapManaEnabler")
 
-    # Burst mana from tapping a single creature based on other creatures (Brigid-back style)
-    # Look for: "{T}: Add X mana ... where X is the number of other creatures you control"
-    if _TAP_ADD_X_OTHER_CREATURES_RE.search(facts.oracle_text or ""):
+    # Per-card tap-for-mana sources (covers dorks/rocks/land-creatures; lands are handled separately)
+    if _TAP_ADD_RE.search(facts.oracle_text or ""):
+        if facts.is_creature:
+            roles.add("ManaDork")
+        if facts.is_artifact:
+            roles.add("ManaRock")
+
+    # Burst mana from a single tap based on creature count (Cradle / Itlimoc / Brigid-back style)
+    if _BURST_FROM_CREATURES_RE.search(facts.oracle_text or ""):
         roles.add("BurstManaFromCreatures")
 
     return roles

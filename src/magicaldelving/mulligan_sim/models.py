@@ -1,5 +1,5 @@
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
 
 
@@ -32,6 +32,14 @@ class GameState:
 
     # When each permanent entered (for summoning sickness)
     entered_turn: Dict[str, int] = None  # type: ignore[assignment]
+
+    # --- Per-permanent state scaffolding ---
+    # These are keyed by card name for now (cheap + works with current set-based battlefield).
+    # If/when we move to true per-instance permanents, these become keyed by permanent-id.
+    tapped: Set[str] = field(default_factory=set)
+    face: Dict[str, int] = field(default_factory=dict)           # 0=front, 1=back
+    counters: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    auras: Dict[str, List[str]] = field(default_factory=dict)
 
     # Rough token modeling
     token_pool: int = 0

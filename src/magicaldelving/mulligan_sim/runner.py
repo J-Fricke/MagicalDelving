@@ -7,10 +7,9 @@ from typing import Any, Dict, List, Optional
 from .combat import evaluate_damage_this_turn
 from .index import CardIndex
 from .mana import (
-    burst_mana_from_creatures_if_available,
-    compute_creature_tap_mana_pool,
+    compute_burst_mana_pools,
+    compute_tap_mana_pool,
     default_cast_policy,
-    has_creature_tap_mana_enabler,
 )
 from .models import GameState, SimConfig, SimGoals
 from .mulligan import london_mulligan
@@ -63,7 +62,12 @@ def run_sim(
                     st.hand.remove(c)
                     st.battlefield.add(c)
                     st.entered_turn[c] = st.turn
-                    st.lands_in_play += 1
+                    f = card_index.facts(c)
+                    # Land-creatures (e.g., Dryad Arbor) are creatures => summoning sickness applies to tapping.
+                    # Burst-from-creatures lands (e.g., Cradle/Itlimoc) are not "1-mana lands".
+                    # So only increment lands_in_play for normal, non-creature, non-burst lands.
+                    if f and (not f.is_creature) and ("BurstManaFromCreatures" not in card_index.roles(c)):
+                        st.lands_in_play += 1
                     break
 
             # passive token growth: each TokenMaker permanent in play (from prior turns) adds 1 token/turn
@@ -86,28 +90,33 @@ def run_sim(
             if engine_online and st.library:
                 st.hand.append(st.library.pop(0))
 
-            # mana: static first
+            # mana: static first (normal lands + static rocks)
             available_mana = st.lands_in_play + st.ramp_sources_in_play
 
-            # creature-tap mana pools (Rite/Vitality)
-            tap_creature_powers: List[int] = []
-            tap_tokens: int = 0
-            if has_creature_tap_mana_enabler(st, card_index):
-                tap_creature_powers, tap_tokens = compute_creature_tap_mana_pool(st, card_index)
+            # 1-mana taps (dorks OR blanket enabler)
+            tap_creature_powers, tap_tokens = compute_tap_mana_pool(st, card_index)
 
-            # burst man (only if she exists in the model)
-            burst_mana = burst_mana_from_creatures_if_available(st, card_index)
+            # burst mana taps (Cradle/Itlimoc/Brigid-back style)
+            burst_land_sources, burst_creature_sources = compute_burst_mana_pools(st, card_index)
 
-            available_mana, tap_creature_powers, tap_tokens, burst_mana = default_cast_policy(
-                st, card_index, available_mana, tap_creature_powers, tap_tokens, burst_mana
+            available_mana, tap_creature_powers, tap_tokens, burst_land_sources, burst_creature_sources = default_cast_policy(
+                st,
+                card_index,
+                available_mana,
+                tap_creature_powers,
+                tap_tokens,
+                burst_land_sources,
+                burst_creature_sources,
             )
 
             if turn == goals.draw_by_turn:
                 mana_for_check = (
                         st.lands_in_play
                         + st.ramp_sources_in_play
-                        + (len(tap_creature_powers) + tap_tokens if has_creature_tap_mana_enabler(st, card_index) else 0)
-                        + burst_mana
+                        + len(tap_creature_powers)
+                        + tap_tokens
+                        + sum(burst_land_sources)
+                        + sum(burst_creature_sources)
                 )
                 has_refill_in_hand_castable = any(
                     ("Refill" in card_index.roles(c)) and (card_index.mv(c) <= mana_for_check)
