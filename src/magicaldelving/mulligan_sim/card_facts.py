@@ -188,9 +188,26 @@ def infer_roles(facts: CardFacts) -> Set[str]:
     roles: Set[str] = set()
 
     if not facts.is_land:
-        if "add {" in txt:
+        # Ramp: mana abilities (brace or plain-English), plus common treasure producers.
+        # Avoid false positives from "mana value" text.
+        is_mana_ability = (
+                ("add {" in txt)
+                or (
+                        ("add " in txt)
+                        and ("mana" in txt or "one mana" in txt or "two mana" in txt or "three mana" in txt)
+                        and ("mana value" not in txt)
+                        and (("{t}" in txt) or ("tap " in txt) or ("sacrifice" in txt))
+                )
+        )
+
+        if is_mana_ability:
+            # include most permanent sources (rocks/dorks/enchantments)
             if facts.is_artifact or facts.is_creature or facts.is_enchantment:
                 roles.add("Ramp")
+
+        if "treasure token" in txt and ("create" in txt or "creates" in txt):
+            roles.add("Ramp")
+
         if "search your library" in txt and "land" in txt and ("onto the battlefield" in txt or "put" in txt):
             roles.add("Ramp")
 
@@ -200,6 +217,9 @@ def infer_roles(facts: CardFacts) -> Set[str]:
         else:
             if "whenever" in txt or "at the beginning" in txt or "each" in txt:
                 roles.add("DrawEngine")
+    # Activated draw engines & treat any activated draw line as an engine for now
+    if ("draw a card" in txt) and not (facts.is_instant or facts.is_sorcery) and (":" in txt or "{t}" in txt or "tap" in txt):
+        roles.add("DrawEngine")
 
     if "you win the game" in txt or "wins the game" in txt:
         roles.add("Wincon")
@@ -212,6 +232,13 @@ def infer_roles(facts: CardFacts) -> Set[str]:
 
     if "additional combat phase" in txt or "additional combat" in txt:
         roles.add("ExtraCombat")
+
+    # Tokens
+    if "create" in txt and "token" in txt:
+        if facts.is_instant or facts.is_sorcery:
+            roles.add("TokenBurst")
+        else:
+            roles.add("TokenMaker")
 
     return roles
 
