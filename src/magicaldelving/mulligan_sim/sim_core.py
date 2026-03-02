@@ -32,19 +32,17 @@ CREATURE_TAP_MANA_ENABLERS: Set[str] = {
 
 BRIGID_BACK_NAME = "brigid, doun's mind"
 
-
 @dataclass(frozen=True)
 class SimGoals:
-    draw_by_turn: int = 5
-    win_by_turn: int = 8
-    damage_threshold: int = 120  # EDH table
-
+    draw_by_turn: int
+    win_by_turn: int
+    damage_threshold: int
 
 @dataclass(frozen=True)
 class SimConfig:
-    trials: int = 50_000
-    seed: Optional[int] = None
-    max_turns: int = 25
+    trials: int
+    seed: Optional[int]
+    max_turns: int
 
 
 @dataclass
@@ -72,7 +70,7 @@ class GameState:
     finisher_haste: bool = False     # allows same-turn attacks/taps
     finisher_trample: bool = False   # improves connect rate
 
-    # NEW: track bodies tapped for mana this turn (so they can't also attack)
+    # Track bodies tapped for mana this turn (so they can't also attack)
     creatures_tapped_for_mana: int = 0
     tokens_tapped_for_mana: int = 0
     brigid_tapped_for_mana: bool = False
@@ -374,6 +372,7 @@ def default_cast_policy(
     def eff_cost(card: str, mana_total: int) -> int:
         name = (card or "").strip().lower()
         if name == "finale of devastation":
+            # only model the X>=10 finisher mode
             return 12 if mana_total >= 12 else 10_000
         return int(idx.mv(card))
 
@@ -439,10 +438,12 @@ def default_cast_policy(
             break
 
         st.hand.remove(c)
-        st.battlefield.add(c)
-        st.entered_turn[c] = st.turn
 
         f = idx.facts(c)
+        is_perm = bool(f and not (f.is_instant or f.is_sorcery))
+        if is_perm:
+            st.battlefield.add(c)
+            st.entered_turn[c] = st.turn
 
         # Ramp: do NOT increment for creature-tap enablers
         if has_role(c, "Ramp") and name not in CREATURE_TAP_MANA_ENABLERS:
@@ -590,8 +591,9 @@ def run_sim(
 
         st = GameState(turn=0, hand=hand, library=list(lib), battlefield=set())
         engine_online = False
+        win_turn: Optional[int] = None
 
-        for turn in range(1, goals.win_by_turn + 1):
+        for turn in range(1, cfg.max_turns + 1):
             st.turn = turn
 
             # per-turn reset
@@ -616,10 +618,13 @@ def run_sim(
                     st.lands_in_play += 1
                     break
 
-            # passive token growth: each TokenMaker in play (from prior turns) adds 1 token/turn
+            # passive token growth: each TokenMaker permanent in play (from prior turns) adds 1 token/turn
             token_makers = 0
             for c in st.battlefield:
                 if "TokenMaker" not in card_index.roles(c):
+                    continue
+                f = card_index.facts(c)
+                if not f or (f.is_instant or f.is_sorcery):
                     continue
                 if st.entered_turn.get(c, 0) >= st.turn:
                     continue
@@ -650,26 +655,42 @@ def run_sim(
             )
 
             if turn == goals.draw_by_turn:
+                # include creature-tap pools for "castable refill" check
+                mana_for_check = (
+                        st.lands_in_play
+                        + st.ramp_sources_in_play
+                        + (len(tap_creature_powers) + tap_tokens if _has_creature_tap_mana_enabler(st) else 0)
+                        + brigid_burst
+                )
                 has_refill_in_hand_castable = any(
-                    ("Refill" in card_index.roles(c))
-                    and (card_index.mv(c) <= (st.lands_in_play + st.ramp_sources_in_play))
+                    ("Refill" in card_index.roles(c)) and (card_index.mv(c) <= mana_for_check)
                     for c in st.hand
                 )
                 if engine_online or st.refills_resolved > 0 or has_refill_in_hand_castable:
                     draw_ok_count += 1
 
             if has_wincon_resolved(st, card_index):
-                win_ok_count += 1
-                first_win_turns.append(turn)
+                win_turn = turn
                 break
 
             st.cumulative_damage += evaluate_damage_this_turn(st, card_index)
             if st.cumulative_damage >= goals.damage_threshold:
-                win_ok_count += 1
-                first_win_turns.append(turn)
+                win_turn = turn
                 break
 
+        if win_turn is not None:
+            first_win_turns.append(win_turn)
+            if win_turn <= goals.win_by_turn:
+                win_ok_count += 1
+
     dist = Counter(first_win_turns)
+
+    wins_total = len(first_win_turns)
+    avg_win_turn_wins_only = (sum(first_win_turns) / wins_total) if wins_total else None
+    avg_win_turn_capped = (
+        (sum(first_win_turns) + (cfg.trials - wins_total) * (cfg.max_turns + 1)) / cfg.trials
+        if cfg.trials else None
+    )
 
     return {
         "trials": cfg.trials,
@@ -677,6 +698,10 @@ def run_sim(
         "draw_ok_count": draw_ok_count,
         "win_ok_rate": win_ok_count / cfg.trials if cfg.trials else 0.0,
         "win_ok_count": win_ok_count,
+        "wins_total": wins_total,
+        "avg_win_turn_wins_only": avg_win_turn_wins_only,
+        "avg_win_turn_capped": avg_win_turn_capped,
+        "sim_max_turns": cfg.max_turns,
         "first_win_turn_dist": {str(k): int(v) for k, v in sorted(dist.items())},
         "goals": {
             "draw_by_turn": goals.draw_by_turn,

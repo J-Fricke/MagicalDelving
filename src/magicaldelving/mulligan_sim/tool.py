@@ -3,6 +3,14 @@ import json
 import os
 import sys
 from typing import Optional, Set, List, TextIO
+from magicaldelving.mulligan_sim.defaults import (
+    DEFAULT_TRIALS,
+    DEFAULT_DRAW_BY,
+    DEFAULT_WIN_BY,
+    DEFAULT_DAMAGE_THRESHOLD,
+    DEFAULT_MAX_MULLS,
+    DEFAULT_MAX_TURNS,
+)
 
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
@@ -14,18 +22,18 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     src = ap.add_mutually_exclusive_group(required=False)
     src.add_argument("--deck", default=None, help="Decklist path, or '-' to read from stdin")
     src.add_argument("--moxfield", default=None, help="Moxfield deck URL or deck id")
-    ap.add_argument("--iters", type=int, default=50_000, help="Number of simulations")
     ap.add_argument("--seed", type=int, default=None, help="RNG seed (optional)")
-    ap.add_argument("--max-mulls", type=int, default=3, help="Max mulligans (London)")
-    ap.add_argument("--draw-by", type=int, default=5, help="Turn by which we want draw online")
-    ap.add_argument("--win-by", type=int, default=8, help="Turn by which we want to win")
-    ap.add_argument("--damage-threshold", type=int, default=120, help="Damage threshold to count as win")
     ap.add_argument("--offline", action="store_true", help="No network calls (requires warm cache / local decklist)")
     ap.add_argument("--scryfall-cache", default=None, help="Override Scryfall cache path")
     ap.add_argument("--json", action="store_true", help="Output JSON instead of text")
     ap.add_argument("--explain-roles", action="store_true", help="Print role classification (moxfield/tag/oracle)")
     ap.add_argument("--verbose", action="store_true", help="Print extra details (e.g., win turn distribution)")
-    ap.add_argument("--max-turns", type=int, default=25, help="Simulate up to this turn (safety cap)")
+    ap.add_argument("--iters", type=int, default=DEFAULT_TRIALS, help="Number of simulations")
+    ap.add_argument("--max-mulls", type=int, default=DEFAULT_MAX_MULLS, help="Max mulligans (London)")
+    ap.add_argument("--draw-by", type=int, default=DEFAULT_DRAW_BY, help="Turn by which we want draw online")
+    ap.add_argument("--win-by", type=int, default=DEFAULT_WIN_BY, help="Turn by which we want to win")
+    ap.add_argument("--damage-threshold", type=int, default=DEFAULT_DAMAGE_THRESHOLD, help="Damage threshold to count as win")
+    ap.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS, help="Simulate up to this turn (safety cap)")
 
     return ap.parse_args(argv)
 
