@@ -1,6 +1,7 @@
 from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 
 
 @dataclass(frozen=True)
@@ -18,43 +19,61 @@ class SimConfig:
 
 
 @dataclass
+class Permanent:
+    """Per-permanent state (supports duplicates + transform + counters)."""
+
+    pid: int
+    name: str
+    entered_turn: int
+
+    # 0=front, 1=back, etc. (DFC / modal / split)
+    face: int = 0
+
+    tapped: bool = False
+
+    # +1/+1, charge, etc.
+    counters: Dict[str, int] = field(default_factory=dict)
+
+    # Aura names attached (rough for now)
+    auras: List[str] = field(default_factory=list)
+
+
+@dataclass
 class GameState:
     turn: int
     hand: List[str]
     library: List[str]
-    battlefield: Set[str]
 
+    battlefield: Dict[int, Permanent] = field(default_factory=dict)
+    next_pid: int = 1
+
+    # "static" sources (modeled as counts for now)
     lands_in_play: int = 0
-    ramp_sources_in_play: int = 0  # "static" sources (rocks/dorks) for now
+    ramp_sources_in_play: int = 0
 
     refills_resolved: int = 0
     cumulative_damage: int = 0
 
-    # When each permanent entered (for summoning sickness)
-    entered_turn: Dict[str, int] = None  # type: ignore[assignment]
-
-    # --- Per-permanent state scaffolding ---
-    # These are keyed by card name for now (cheap + works with current set-based battlefield).
-    # If/when we move to true per-instance permanents, these become keyed by permanent-id.
-    tapped: Set[str] = field(default_factory=set)
-    face: Dict[str, int] = field(default_factory=dict)           # 0=front, 1=back
-    counters: Dict[str, Dict[str, int]] = field(default_factory=dict)
-    auras: Dict[str, List[str]] = field(default_factory=dict)
-
     # Rough token modeling
     token_pool: int = 0
-    tokens_created_this_turn: int = 0  # cannot attack/tap this turn unless haste
+    tokens_created_this_turn: int = 0
 
     # One-turn combat buff modeling (from finisher spells)
-    finisher_boost: int = 0          # +X/+X applied to each attacker
-    finisher_haste: bool = False     # allows same-turn attacks/taps
-    finisher_trample: bool = False   # improves connect rate
+    finisher_boost: int = 0
+    finisher_haste: bool = False
+    finisher_trample: bool = False
 
-    # Track bodies tapped for mana this turn (so they can't also attack)
+    # Track taps for debug/summary
     creatures_tapped_for_mana: int = 0
     tokens_tapped_for_mana: int = 0
-    brigid_tapped_for_mana: bool = False
+    burst_creatures_tapped: int = 0
+    burst_lands_tapped: int = 0
 
-    def __post_init__(self) -> None:
-        if self.entered_turn is None:
-            self.entered_turn = {}
+    def add_permanent(self, name: str, entered_turn: int, face: int = 0) -> int:
+        pid = self.next_pid
+        self.next_pid += 1
+        self.battlefield[pid] = Permanent(pid=pid, name=name, entered_turn=entered_turn, face=face)
+        return pid
+
+    def iter_permanents(self):
+        return self.battlefield.values()

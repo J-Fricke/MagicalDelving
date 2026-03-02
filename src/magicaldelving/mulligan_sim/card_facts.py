@@ -1,23 +1,20 @@
 from __future__ import annotations
-from typing import Iterable
+
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, Optional, Set, Tuple, List
 import re
 
-# NOTE: These heuristics are intentionally permissive. We prefer false positives
-# in *role discovery* and then rely on the sim's constraints (summoning sickness,
-# tap-vs-attack tension, etc.) to keep results reasonable.
+# ---------- Oracle pattern helpers (also used for face-aware roles) ----------
 
 _TAP_ADD_RE = re.compile(r"\{t\}:\s*add\b", re.IGNORECASE)
 
-# "Creatures you control have '{T}: Add ...'" (Cryptolith Rite / Enduring Vitality / etc.)
+# "Creatures you control have '{T}: Add ...'" (Cryptolith Rite / Enduring Vitality / Badgermole Cub style)
 _CREATURES_HAVE_TAP_ADD_RE = re.compile(
     r"creatures\s+you\s+control\s+have.*\{t\}:\s*add\b",
     re.IGNORECASE | re.DOTALL,
     )
 
-# "{T}: Add ... for each creature you control" (Gaea's Cradle / Itlimoc-style)
-# OR "{T}: Add X ... where X is the number of (other) creatures you control" (Brigid-back style)
+# Burst mana based on creature count (Cradle / Itlimoc / Brigid-back style)
 _BURST_FROM_CREATURES_RE = re.compile(
     r"\{t\}:\s*add\s+.*(for\s+each\s+(other\s+)?creature\s+you\s+control|where\s+x\s+is\s+the\s+number\s+of\s+(other\s+)?creatures\s+you\s+control)",
     re.IGNORECASE | re.DOTALL,
@@ -76,14 +73,6 @@ def _any_face_type_contains(card_json: Dict[str, Any], needle: str) -> bool:
 # ----------------------------
 
 def _roles_from_tag(tag: str) -> Set[str]:
-    """
-    Normalize decklist / Moxfield tags into the small role vocabulary used by mulligan_sim.
-
-    We accept both:
-      - direct role tags: Ramp / DrawEngine / Refill / Wincon / Damage / Evasion / ExtraCombat
-      - loose/synonym tags: "Draw", "Card Advantage", "Wheel", "Combo", etc.
-      - namespaced Moxfield tags: "Mx:<Category>"
-    """
     raw = (tag or "").strip()
     if not raw:
         return set()
@@ -103,6 +92,9 @@ def _roles_from_tag(tag: str) -> Set[str]:
         "damage": "Damage",
         "evasion": "Evasion",
         "extracombat": "ExtraCombat",
+        "finisher": "Finisher",
+        "tokenmaker": "TokenMaker",
+        "tokenburst": "TokenBurst",
     }
     key = low.replace(" ", "")
     if key in direct:
@@ -131,9 +123,6 @@ def _roles_from_tag(tag: str) -> Set[str]:
 
 
 def _augment_roles_with_tags(roles: Set[str], tags: Set[str]) -> None:
-    """
-    Add both the raw tags (for future/diagnostic use) and the normalized roles derived from them.
-    """
     for t in tags:
         if not t:
             continue
@@ -201,15 +190,44 @@ class CardFacts:
             power=p,
         )
 
+    def _split_faces(self, text: str) -> List[str]:
+        parts = [p.strip() for p in (text or "").split("\n//\n") if p.strip()]
+        return parts if parts else [text or ""]
+
+    def face_oracle_text(self, face: int) -> str:
+        parts = self._split_faces(self.oracle_text)
+        if 0 <= face < len(parts):
+            return parts[face]
+        return parts[0]
+
+    def face_type_line(self, face: int) -> str:
+        parts = self._split_faces(self.type_line)
+        if 0 <= face < len(parts):
+            return parts[face]
+        return parts[0]
+
+
+# ---------- Face-aware checks used by CardIndex ----------
+
+def face_has_tap_add(facts: CardFacts, face: int) -> bool:
+    return bool(_TAP_ADD_RE.search(facts.face_oracle_text(face) or ""))
+
+
+def face_has_creature_tap_mana_enabler(facts: CardFacts, face: int) -> bool:
+    return bool(_CREATURES_HAVE_TAP_ADD_RE.search(facts.face_oracle_text(face) or ""))
+
+
+def face_has_burst_from_creatures(facts: CardFacts, face: int) -> bool:
+    return bool(_BURST_FROM_CREATURES_RE.search(facts.face_oracle_text(face) or ""))
+
 
 def infer_roles(facts: CardFacts) -> Set[str]:
-    """Heuristic role inference from Scryfall facts."""
+    """Heuristic role inference from Scryfall facts (union across faces)."""
     txt = (facts.oracle_text or "").lower()
     roles: Set[str] = set()
 
+    # Ramp
     if not facts.is_land:
-        # Ramp: mana abilities (brace or plain-English), plus common treasure producers.
-        # Avoid false positives from "mana value" text.
         is_mana_ability = (
                 ("add {" in txt)
                 or (
@@ -219,11 +237,8 @@ def infer_roles(facts: CardFacts) -> Set[str]:
                         and (("{t}" in txt) or ("tap " in txt) or ("sacrifice" in txt))
                 )
         )
-
-        if is_mana_ability:
-            # include most permanent sources (rocks/dorks/enchantments)
-            if facts.is_artifact or facts.is_creature or facts.is_enchantment:
-                roles.add("Ramp")
+        if is_mana_ability and (facts.is_artifact or facts.is_creature or facts.is_enchantment):
+            roles.add("Ramp")
 
         if "treasure token" in txt and ("create" in txt or "creates" in txt):
             roles.add("Ramp")
@@ -231,19 +246,22 @@ def infer_roles(facts: CardFacts) -> Set[str]:
         if "search your library" in txt and "land" in txt and ("onto the battlefield" in txt or "put" in txt):
             roles.add("Ramp")
 
+    # Draw
     if "draw" in txt and "card" in txt:
         if facts.is_instant or facts.is_sorcery:
             roles.add("Refill")
         else:
             if "whenever" in txt or "at the beginning" in txt or "each" in txt:
                 roles.add("DrawEngine")
-    # Activated draw engines & treat any activated draw line as an engine for now
+
     if ("draw a card" in txt) and not (facts.is_instant or facts.is_sorcery) and (":" in txt or "{t}" in txt or "tap" in txt):
         roles.add("DrawEngine")
 
+    # Win
     if "you win the game" in txt or "wins the game" in txt:
         roles.add("Wincon")
 
+    # Creature heuristics
     if facts.is_creature:
         if facts.power is not None and facts.power >= 4:
             roles.add("Damage")
@@ -260,21 +278,18 @@ def infer_roles(facts: CardFacts) -> Set[str]:
         else:
             roles.add("TokenMaker")
 
-    # Creature-tap mana enablers (Cryptolith Rite / Enduring Vitality style)
-    # Look for: "creatures you control have '{T}: Add ...'"
-    if _CREATURES_HAVE_TAP_ADD_RE.search(facts.oracle_text or ""):
-        roles.add("CreatureTapManaEnabler")
-
-    # Per-card tap-for-mana sources (covers dorks/rocks/land-creatures; lands are handled separately)
-    if _TAP_ADD_RE.search(facts.oracle_text or ""):
-        if facts.is_creature:
-            roles.add("ManaDork")
-        if facts.is_artifact:
-            roles.add("ManaRock")
-
-    # Burst mana from a single tap based on creature count (Cradle / Itlimoc / Brigid-back style)
-    if _BURST_FROM_CREATURES_RE.search(facts.oracle_text or ""):
-        roles.add("BurstManaFromCreatures")
+    # Mana behavior roles (union across faces)
+    for face in range(len(facts._split_faces(facts.oracle_text))):
+        if face_has_creature_tap_mana_enabler(facts, face):
+            roles.add("CreatureTapManaEnabler")
+        if face_has_burst_from_creatures(facts, face):
+            roles.add("BurstManaFromCreatures")
+        if face_has_tap_add(facts, face):
+            tl = facts.face_type_line(face)
+            if "Creature" in tl:
+                roles.add("ManaDork")
+            if "Artifact" in tl:
+                roles.add("ManaRock")
 
     return roles
 
@@ -283,7 +298,6 @@ def build_facts_and_roles(
         scryfall_cards_by_input_name: Dict[str, Dict[str, Any]],
         inline_tags: Dict[str, Set[str]] | None = None,
 ) -> Dict[str, Tuple[CardFacts, Set[str]]]:
-    """Return mapping card_name -> (facts, roles)."""
     inline_tags = inline_tags or {}
     out: Dict[str, Tuple[CardFacts, Set[str]]] = {}
 

@@ -8,7 +8,7 @@ from .combat import evaluate_damage_this_turn
 from .index import CardIndex
 from .mana import (
     compute_burst_mana_pools,
-    compute_tap_mana_pool,
+    compute_creature_tap_mana_pool,
     default_cast_policy,
 )
 from .models import GameState, SimConfig, SimGoals
@@ -36,21 +36,25 @@ def run_sim(
     for _ in range(cfg.trials):
         hand, lib = london_mulligan(base_cards, card_index, rng, max_mulls=max_mulls)
 
-        st = GameState(turn=0, hand=hand, library=list(lib), battlefield=set())
+        st = GameState(turn=0, hand=hand, library=list(lib))
         engine_online = False
         win_turn: Optional[int] = None
 
         for turn in range(1, cfg.max_turns + 1):
             st.turn = turn
 
-            # per-turn reset
+            # ---- untap + per-turn reset ----
+            for p in st.iter_permanents():
+                p.tapped = False
+
             st.tokens_created_this_turn = 0
             st.finisher_boost = 0
             st.finisher_haste = False
             st.finisher_trample = False
             st.creatures_tapped_for_mana = 0
             st.tokens_tapped_for_mana = 0
-            st.brigid_tapped_for_mana = False
+            st.burst_creatures_tapped = 0
+            st.burst_lands_tapped = 0
 
             # draw step (EDH draws on T1)
             if st.library:
@@ -60,25 +64,25 @@ def run_sim(
             for c in list(st.hand):
                 if card_index.is_land(c):
                     st.hand.remove(c)
-                    st.battlefield.add(c)
-                    st.entered_turn[c] = st.turn
-                    f = card_index.facts(c)
-                    # Land-creatures (e.g., Dryad Arbor) are creatures => summoning sickness applies to tapping.
-                    # Burst-from-creatures lands (e.g., Cradle/Itlimoc) are not "1-mana lands".
-                    # So only increment lands_in_play for normal, non-creature, non-burst lands.
-                    if f and (not f.is_creature) and ("BurstManaFromCreatures" not in card_index.roles(c)):
+                    pid = st.add_permanent(c, entered_turn=st.turn, face=0)
+                    p = st.battlefield[pid]
+
+                    # Count "normal" lands as +1 static mana.
+                    # Land-creatures (e.g., Dryad Arbor) are handled via ManaDork logic / sickness.
+                    # Burst lands (Cradle/Itlimoc) are handled via BurstManaFromCreatures.
+                    is_land = card_index.is_land_perm(p)
+                    is_creature = card_index.is_creature_perm(p)
+                    is_burst = "BurstManaFromCreatures" in card_index.roles_for_perm(p)
+                    if is_land and (not is_creature) and (not is_burst):
                         st.lands_in_play += 1
                     break
 
             # passive token growth: each TokenMaker permanent in play (from prior turns) adds 1 token/turn
             token_makers = 0
-            for c in st.battlefield:
-                if "TokenMaker" not in card_index.roles(c):
+            for p in st.iter_permanents():
+                if "TokenMaker" not in card_index.roles_for_perm(p):
                     continue
-                f = card_index.facts(c)
-                if not f or (f.is_instant or f.is_sorcery):
-                    continue
-                if st.entered_turn.get(c, 0) >= st.turn:
+                if p.entered_turn >= st.turn:
                     continue
                 token_makers += 1
             if token_makers:
@@ -86,24 +90,24 @@ def run_sim(
                 st.tokens_created_this_turn += token_makers
 
             # draw engine online?
-            engine_online = engine_online or any("DrawEngine" in card_index.roles(c) for c in st.battlefield)
+            engine_online = engine_online or any("DrawEngine" in card_index.roles_for_perm(p) for p in st.iter_permanents())
             if engine_online and st.library:
                 st.hand.append(st.library.pop(0))
 
-            # mana: static first (normal lands + static rocks)
+            # mana: static first (normal lands + static ramp count)
             available_mana = st.lands_in_play + st.ramp_sources_in_play
 
             # 1-mana taps (dorks OR blanket enabler)
-            tap_creature_powers, tap_tokens = compute_tap_mana_pool(st, card_index)
+            tap_creature_ids, tap_tokens = compute_creature_tap_mana_pool(st, card_index)
 
             # burst mana taps (Cradle/Itlimoc/Brigid-back style)
             burst_land_sources, burst_creature_sources = compute_burst_mana_pools(st, card_index)
 
-            available_mana, tap_creature_powers, tap_tokens, burst_land_sources, burst_creature_sources = default_cast_policy(
+            available_mana, tap_creature_ids, tap_tokens, burst_land_sources, burst_creature_sources = default_cast_policy(
                 st,
                 card_index,
                 available_mana,
-                tap_creature_powers,
+                tap_creature_ids,
                 tap_tokens,
                 burst_land_sources,
                 burst_creature_sources,
@@ -113,10 +117,10 @@ def run_sim(
                 mana_for_check = (
                         st.lands_in_play
                         + st.ramp_sources_in_play
-                        + len(tap_creature_powers)
+                        + len(tap_creature_ids)
                         + tap_tokens
-                        + sum(burst_land_sources)
-                        + sum(burst_creature_sources)
+                        + sum(x for x, _ in burst_land_sources)
+                        + sum(x for x, _ in burst_creature_sources)
                 )
                 has_refill_in_hand_castable = any(
                     ("Refill" in card_index.roles(c)) and (card_index.mv(c) <= mana_for_check)

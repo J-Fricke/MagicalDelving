@@ -1,37 +1,41 @@
 from __future__ import annotations
 
-from .combat import global_haste_online, is_hasty_creature
+from .combat import can_use_creature_this_turn, global_haste_online
 from .index import CardIndex
 from .models import GameState
 
 
 def count_ready_creatures_for_tap(st: GameState, idx: CardIndex) -> int:
-    haste_all = global_haste_online(st, idx) or st.finisher_haste
+    """Creatures that can be tapped right now (summoning sickness applies unless haste)."""
     n = 0
-    for c in st.battlefield:
-        f = idx.facts(c)
-        if not (f and f.is_creature):
+    for p in st.iter_permanents():
+        if not idx.is_creature_perm(p):
             continue
-        entered = st.entered_turn.get(c, 0)
-        if entered >= st.turn:
-            if not haste_all and not is_hasty_creature(c, idx):
-                continue
+        if p.tapped:
+            continue
+        if not can_use_creature_this_turn(st, idx, p):
+            continue
         n += 1
+
+    # Tokens can count as creatures for Halo Fountain.
+    haste_all = global_haste_online(st, idx) or st.finisher_haste
+    tok = st.token_pool
+    if not haste_all:
+        tok = max(0, tok - st.tokens_created_this_turn)
+    n += tok
+
     return n
 
 
 def has_wincon_resolved(st: GameState, idx: CardIndex) -> bool:
     # unconditional you-win (non-activated)
-    for c in st.battlefield:
-        f = idx.facts(c)
-        if not f:
-            continue
-        txt = (f.oracle_text or "").lower()
+    for p in st.iter_permanents():
+        txt = (idx.oracle_for_perm(p) or "").lower()
         if ("you win the game" in txt or "wins the game" in txt) and ":" not in txt:
             return True
 
     # Halo Fountain explicit activation (approx; ignores color): 6 mana + 15 ready creatures
-    halo_on_board = any((c or "").strip().lower() == "halo fountain" for c in st.battlefield)
+    halo_on_board = any((p.name or "").strip().lower() == "halo fountain" for p in st.iter_permanents())
     if halo_on_board:
         available_mana = st.lands_in_play + st.ramp_sources_in_play
         ready_creatures = count_ready_creatures_for_tap(st, idx)
