@@ -3,7 +3,7 @@ import json
 import os
 import sys
 from typing import Optional, Set, List, TextIO
-from magicaldelving.mulligan_sim.defaults import (
+from .defaults import (
     DEFAULT_TRIALS,
     DEFAULT_DRAW_BY,
     DEFAULT_WIN_BY,
@@ -70,7 +70,7 @@ def _role_sources(
 
 
 def _print_role_report(deck, idx, out: TextIO) -> None:
-    from magicaldelving.mulligan_sim.card_facts import infer_roles, roles_from_tags
+    from .card_facts import infer_roles, roles_from_tags
 
     ROLE_SET = ["DrawEngine", "Refill", "Ramp", "Wincon", "Finisher"]
     buckets = {r: [] for r in ROLE_SET}
@@ -135,9 +135,11 @@ def _pct(x: float, color: bool) -> str:
 def main() -> int:
     args = parse_args()
 
-    from magicaldelving.mulligan_sim.deck_parser import parse_deck_text
-    from magicaldelving.mulligan_sim.sim_core import CardIndex, SimConfig, SimGoals, run_sim
-    from magicaldelving.mulligan_sim.card_facts import build_facts_and_roles
+    from .deck_parser import parse_deck_text
+    from .index import CardIndex
+    from .models import SimConfig, SimGoals
+    from .runner import run_sim
+    from .card_facts import build_facts_and_roles
     from magicaldelving.scryfall import ScryfallClient
 
     # Load deck text

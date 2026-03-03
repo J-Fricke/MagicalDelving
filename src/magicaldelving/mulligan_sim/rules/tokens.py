@@ -296,3 +296,53 @@ def resolve_templates(
         # Repeat proto n times (callers can compress to qty later)
         out.extend([t.proto] * n)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Legacy helper
+# ---------------------------------------------------------------------------
+# TODO: remove this once all token creation is routed through deterministic templates + chosen_x/state/env.
+def estimate_tokens_created_from_text(txt: str) -> int:
+    """Back-compat: return a rough count of created tokens from oracle text.
+
+    This exists only to keep the sim running during the refactor.
+    Deterministic token creation should use parse_token_templates + resolve_templates.
+    """
+    t = (txt or "").lower()
+    if "create" not in t or "token" not in t:
+        return 0
+
+    # Fast path: sum fixed counts from parsed templates.
+    try:
+        tmpls = parse_token_templates(txt)
+        total = 0
+        for tm in tmpls:
+            if tm.count.kind == "fixed":
+                total += int(tm.count.value)
+            elif tm.count.kind == "chosen_x":
+                # Unknown without cast context; keep legacy behavior: treat as 4.
+                total += 4
+        if total > 0:
+            return total
+    except Exception:
+        pass
+
+    # Fallback: very simple regex.
+    m = re.search(r"create\s+(\d+)\s+.*token", t)
+    if m:
+        try:
+            return max(1, int(m.group(1)))
+        except Exception:
+            return 1
+
+    m = re.search(
+        r"create\s+(one|two|three|four|five|six|seven|eight|nine|ten)\s+.*token",
+        t,
+    )
+    if m:
+        return _WORD_NUM.get(m.group(1), 1)
+
+    if re.search(r"create\s+x\s+.*token", t):
+        return 4
+
+    return 1

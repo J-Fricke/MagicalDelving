@@ -59,10 +59,10 @@ def _toggle_face(p: Permanent) -> None:
 
 
 def _total_creatures_controlled(st: GameState, idx: CardIndex) -> int:
-    n = st.token_pool
+    n = 0
     for perm in st.iter_permanents():
         if idx.is_creature_perm(perm):
-            n += 1
+            n += int(getattr(perm, "qty", 1) or 1)
     return n
 
 

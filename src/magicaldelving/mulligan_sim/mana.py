@@ -5,7 +5,7 @@ from typing import List, Tuple
 
 from .index import CardIndex
 from .models import GameState, Permanent
-from .tokens import estimate_tokens_created_from_text
+from .rules.tokens import estimate_tokens_created_from_text
 
 
 def _oracle_lc(idx: CardIndex, name: str) -> str:
