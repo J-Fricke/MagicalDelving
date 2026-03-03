@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 
-from .index import CardIndex
-from .models import GameState
-from .state_mutators import recompute_continuous_effects
+from ..index import CardIndex
+from ..models import GameState
+from ..engine.state_mutators import recompute_continuous_effects
 
 
 def evaluate_combat_step(st: GameState, idx: CardIndex) -> int:

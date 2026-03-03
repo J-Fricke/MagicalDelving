@@ -17,3 +17,7 @@ ACTION_ROLES: Set[str] = {
     "Finisher",
     "Wincon",
 }
+
+OPP_CREATURES_CURVE = "low"
+X_TO_CAST_MIN = 5
+X_TO_CAST_PREFER = 8

@@ -219,9 +219,9 @@ def main() -> int:
         f"{_bold('Results', color)} - "
         f"Draw By({args.draw_by}): {_pct(draw_rate, color)} "
         f"Win By({args.win_by}): {_pct(win_rate, color)} "
-        f"Avg Win Turn: {avg_str} "
-        f"Max Win Turn: {max_win_turn} "
-        f"Delta: {delta} "
+        f"Avg Win Turn: {avg_str}"
+        f"Max Win Turn: {args.max_win_turn}"
+        f"Delta: {args.avg_to_max_delta_capped}"
     )
     print("")  # blank line
 

@@ -3,13 +3,15 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Tuple
 
-from .index import CardIndex
-from .models import GameState, Permanent
+from ..index import CardIndex
+from ..models import GameState
 
 
 _ANTHEM_PT_RE = re.compile(r"creatures you control get \+(\d+)\/\+(\d+)", re.IGNORECASE)
 _ANTHEM_TOK_RE = re.compile(r"creature tokens you control get \+(\d+)\/\+(\d+)", re.IGNORECASE)
+
 _GRANT_HAVE_RE = re.compile(r"creatures you control have ([a-z ]+?)(?:\.|,|;|$)", re.IGNORECASE)
+_GRANT_GAIN_EOT_RE = re.compile(r"creatures you control gain ([a-z ]+?) until end of turn", re.IGNORECASE)
 
 _KEYWORDS = {
     "flying": "Flying",
@@ -26,13 +28,17 @@ _KEYWORDS = {
 
 
 def recompute_continuous_effects(st: GameState, idx: CardIndex) -> None:
+    """
+    Rebuild each permanent's current power/toughness/keywords from base + counters + active continuous sources.
+    This is intentionally small and extensible.
+    """
     # 1) reset derived stats
     for p in st.iter_permanents():
         # start from base (default to 0 if unknown)
         p.power = int(p.base_power) if p.base_power is not None else 0
         p.toughness = int(p.base_toughness) if p.base_toughness is not None else 0
 
-        # (optional) counters support
+        # counters support (+1/+1 only for now)
         n = int(p.counters.get("+1/+1", 0) or 0)
         if n:
             p.power += n
@@ -45,9 +51,12 @@ def recompute_continuous_effects(st: GameState, idx: CardIndex) -> None:
             except Exception:
                 pass
 
-    # 2) gather effects
-    team_pt: List[Tuple[int, int]] = []        # (+P, +T) for creatures you control (single-player -> always applies)
-    token_pt: List[Tuple[int, int]] = []       # (+P, +T) for creature tokens you control
+        # keywords should already include printed + previously applied grants if you track them.
+        # We do NOT clear keywords here because you may be maintaining base/temporary keywords elsewhere.
+
+    # 2) gather effects (single-player: applies to all your permanents)
+    team_pt: List[Tuple[int, int]] = []    # (+P, +T) for creatures you control
+    token_pt: List[Tuple[int, int]] = []   # (+P, +T) for creature tokens you control
     team_kw: List[str] = []
 
     for src in st.iter_permanents():
@@ -62,6 +71,11 @@ def recompute_continuous_effects(st: GameState, idx: CardIndex) -> None:
             token_pt.append((int(m.group(1)), int(m.group(2))))
 
         for mm in _GRANT_HAVE_RE.finditer(txt):
+            kw_raw = mm.group(1).strip()
+            if kw_raw in _KEYWORDS:
+                team_kw.append(_KEYWORDS[kw_raw])
+
+        for mm in _GRANT_GAIN_EOT_RE.finditer(txt):
             kw_raw = mm.group(1).strip()
             if kw_raw in _KEYWORDS:
                 team_kw.append(_KEYWORDS[kw_raw])
@@ -85,7 +99,9 @@ def recompute_continuous_effects(st: GameState, idx: CardIndex) -> None:
 
 
 def run_cleanup(st: GameState, idx: CardIndex) -> None:
-    # apply delayed effects
+    """
+    Cleanup step: run delayed effects scheduled for CLEANUP, then recompute, then merge identical groups.
+    """
     for pid, p in list(st.battlefield.items()):
         remaining = []
         for d in p.delayed:
@@ -97,6 +113,13 @@ def run_cleanup(st: GameState, idx: CardIndex) -> None:
 
     st.emit("CLEANUP", {})
     recompute_continuous_effects(st, idx)
+    merge_identical(st)
+
+
+def beginning_merge(st: GameState) -> None:
+    """
+    Call after UNTAP (and after you update sick flags) to merge stacks that only differed by qty.
+    """
     merge_identical(st)
 
 

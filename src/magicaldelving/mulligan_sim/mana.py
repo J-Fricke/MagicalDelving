@@ -8,9 +8,6 @@ from .models import GameState, Permanent
 from .tokens import estimate_tokens_created_from_text
 
 
-_MANA_SYMBOL_RE = re.compile(r"\{([^}]+)\}")
-
-
 def _oracle_lc(idx: CardIndex, name: str) -> str:
     f = idx.facts(name)
     return (f.oracle_text or "").lower() if f else ""
@@ -73,8 +70,10 @@ def _tap_units(st: GameState, pid: int, n: int = 1) -> int:
 
 
 # ---------------------------
-# Token creation (minimal creature-token parser)
+# Token creation (legacy helper)
 # ---------------------------
+# TODO: Replace estimate_tokens_created_from_text + heuristic token parsing with deterministic token resolver (X + where-X).
+# TODO: Opponent-derived X counts should use defaults.py scenario knobs, not card names.
 
 _CREATURE_TOKEN_RE = re.compile(
     r"create\s+(?:a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+"
@@ -96,10 +95,10 @@ _WITH_KW = {
 }
 
 
-def _add_generic_creature_tokens(st: GameState, idx: CardIndex, source_oracle: str, count: int) -> None:
+def _add_generic_creature_tokens(st: GameState, source_oracle: str, count: int) -> None:
     """
     Best-effort creature token creation.
-    If parsing fails, creates 0/0 Creature tokens (so it "fails gracefully" without inventing stats).
+    If parsing fails, creates 0/0 Creature tokens (fails gracefully without inventing stats).
     """
     txt = (source_oracle or "").lower()
     m = _CREATURE_TOKEN_RE.search(txt)
@@ -109,7 +108,7 @@ def _add_generic_creature_tokens(st: GameState, idx: CardIndex, source_oracle: s
     types = {"Creature"}
     subtypes = set()
     keywords = set()
-    tapped_on_entry = "tapped" in txt and "create" in txt  # coarse
+    tapped_on_entry = "tapped" in txt and "create" in txt
 
     if m:
         try:
@@ -118,34 +117,29 @@ def _add_generic_creature_tokens(st: GameState, idx: CardIndex, source_oracle: s
         except Exception:
             pwr, tgh = 0, 0
 
-        desc = (m.group(3) or "").strip()
-        # figure out if it's "artifact creature" etc
+        desc = (m.group(3) or "").strip().lower()
+
         if "artifact" in desc:
             types.add("Artifact")
         if "enchantment" in desc:
             types.add("Enchantment")
 
-        # grab words before "creature" as candidate subtypes (drop color words)
-        color_words = {"white", "blue", "black", "red", "green", "colorless"}
-        words = [w for w in re.split(r"\s+", desc) if w and w not in color_words]
+        # naive subtype scrape before "creature"
+        words = re.split(r"\s+", desc)
         if "creature" in words:
             i = words.index("creature")
-            # subtype words are typically between color and "creature"
             for w in words[:i]:
-                # skip "artifact"/"enchantment"/"token"
-                if w in {"artifact", "enchantment", "token"}:
+                if w in {"white", "blue", "black", "red", "green", "colorless", "artifact", "enchantment", "token"}:
                     continue
                 subtypes.add(w.capitalize())
 
-        # keywords: "with flying", "with trample", etc.
         for k, K in _WITH_KW.items():
             if f"with {k}" in txt:
                 keywords.add(K)
 
         tapped_on_entry = "tapped" in txt and "create" in txt
 
-    token_name = "Creature Token"
-    new_pid = st.add_permanent(token_name, entered_turn=st.turn, face=0, is_card=False, qty=count)
+    new_pid = st.add_permanent("Creature Token", entered_turn=st.turn, face=0, is_card=False, qty=count)
     tp = st.battlefield[new_pid]
     tp.types = set(types)
     tp.subtypes = set(subtypes)
@@ -155,7 +149,7 @@ def _add_generic_creature_tokens(st: GameState, idx: CardIndex, source_oracle: s
     tp.power = pwr
     tp.toughness = tgh
     tp.tapped = bool(tapped_on_entry)
-    tp.sick = True  # tokens entered this turn
+    tp.sick = True
 
 
 # ---------------------------
@@ -181,30 +175,31 @@ def compute_creature_tap_mana_pool(st: GameState, idx: CardIndex) -> List[Tuple[
     """
     blanket = has_creature_tap_mana_enabler(st, idx)
 
-    pool: List[Tuple[int, int, int]] = []  # (power, pid, qty)
+    pool: List[Tuple[int, int, int]] = []
     for pid, p in st.battlefield.items():
         if not idx.is_creature_perm(p):
             continue
         if p.tapped:
             continue
-
-        # For mana abilities with {T}, summoning sickness applies unless haste.
-        # We use p.can_tap(st) as the standard predicate.
         if not p.can_tap(st):
             continue
 
         roles = idx.roles_for_perm(p)
-
-        # Avoid double-counting burst tap sources as 1-mana dorks.
         if "BurstManaFromCreatures" in roles:
             continue
-
         if (not blanket) and ("ManaDork" not in roles):
             continue
 
         f = idx.facts(p.name)
-        power = int(f.power) if (f and f.power is not None and str(f.power).isdigit()) else p.power_int()
-        pool.append((max(0, power), pid, p.qty))
+        if f and f.power is not None:
+            try:
+                pw = int(f.power)
+            except Exception:
+                pw = p.power_int()
+        else:
+            pw = p.power_int()
+
+        pool.append((max(0, pw), pid, p.qty))
 
     pool.sort(key=lambda x: x[0])
     return pool
@@ -217,7 +212,7 @@ def compute_burst_mana_pools(st: GameState, idx: CardIndex) -> Tuple[List[Tuple[
     Each entry: (mana_amount, pid, available_qty).
     Amount computed from oracle text:
       - "for each creature you control" => X = total creatures
-      - "other creatures you control" => X = total creatures - 1
+      - "other creatures you control" => X = total creatures - source_qty
     """
     total_creatures = 0
     for p in st.iter_permanents():
@@ -233,7 +228,6 @@ def compute_burst_mana_pools(st: GameState, idx: CardIndex) -> Tuple[List[Tuple[
         if "BurstManaFromCreatures" not in idx.roles_for_perm(p):
             continue
 
-        # If this burst source is a creature with {T}, summoning sickness matters.
         if idx.is_creature_perm(p) and not p.can_tap(st):
             continue
 
@@ -288,7 +282,7 @@ def default_cast_policy(
     def pay(cost: int) -> bool:
         nonlocal available_mana, tap_creature_pool, burst_land_sources, burst_creature_sources
 
-        # Tap burst sources first (big chunks)
+        # Tap burst sources first
         while available_mana < cost and (burst_land_sources or burst_creature_sources):
             if burst_land_sources:
                 x, pid, qty = burst_land_sources[0]
@@ -374,13 +368,6 @@ def default_cast_policy(
             new_pid = st.add_permanent(c, entered_turn=st.turn, face=0, is_card=True, qty=1)
             new_perm = st.battlefield.get(new_pid)
 
-            # Optional: seed types/subtypes from facts type line for better method behavior later.
-            # (Safe even if you don't use it yet.)
-            tl = (idx.type_line_for_perm(new_perm) if new_perm else "") if hasattr(idx, "type_line_for_perm") else ""
-            if new_perm and tl:
-                parts = tl.replace("—", " ").replace("-", " ").split()
-                new_perm.types = {w for w in parts if w[:1].isalpha()}
-
         # Ramp: only increment static sources for non-dorks, non-enablers, non-burst.
         if has_role_name(c, "Ramp"):
             roles = idx.roles_for_perm(new_perm) if new_perm else idx.roles(c)
@@ -396,13 +383,13 @@ def default_cast_policy(
                 if st.library:
                     st.hand.append(st.library.pop(0))
 
-        # Tokens (now as permanents)
+        # Tokens (legacy: count + generic token creation)
         if (has_role_name(c, "TokenBurst") or has_role_name(c, "TokenMaker")) and f:
             created = estimate_tokens_created_from_text(f.oracle_text)
             if created > 0:
-                _add_generic_creature_tokens(st, idx, f.oracle_text, created)
+                _add_generic_creature_tokens(st, f.oracle_text, created)
 
-        # Finisher effects (oracle-driven)
+        # Finisher effects
         if _is_x10_haste_pump_finisher(idx, c):
             st.finisher_boost = max(st.finisher_boost, 10)
             st.finisher_haste = True
@@ -412,7 +399,6 @@ def default_cast_policy(
             st.finisher_boost = max(st.finisher_boost, x)
             st.finisher_trample = True
 
-        # Generic finisher spell (tagged): modest boost
         if has_role_name(c, "Finisher") and f and (f.is_instant or f.is_sorcery):
             st.finisher_boost = max(st.finisher_boost, 3)
 
