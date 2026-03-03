@@ -117,7 +117,6 @@ def _bold(s: str, color: bool) -> str:
     return f"\x1b[1m{s}\x1b[0m" if color else s
 
 def _dim(s: str, color: bool) -> str:
-    # ANSI "faint" + grey fallback. Most terminals render this as dim grey.
     return f"\x1b[2m\x1b[90m{s}\x1b[0m" if color else s
 
 def _print_dim(line: str, color: bool) -> None:
@@ -128,7 +127,6 @@ def _pct(x: float, color: bool) -> str:
     val = f"{(x * 100.0):.1f}%"
     if not color:
         return val
-    # green
     return f"\x1b[32m{val}\x1b[0m"
 
 
@@ -136,19 +134,16 @@ def main() -> int:
     args = parse_args()
 
     from .deck_parser import parse_deck_text
-    from .index import CardIndex
-    from .models import SimConfig, SimGoals
-    from .runner import run_sim
+    from .sim_core import CardIndex, SimConfig, SimGoals, run_sim
     from .card_facts import build_facts_and_roles
-    from magicaldelving.scryfall import ScryfallClient
+    from ..scryfall import ScryfallClient
 
-    # Load deck text
     if args.moxfield:
         if args.offline:
             print("ERROR: --offline cannot be used with --moxfield (needs network).", file=sys.stderr)
             return 2
 
-        from magicaldelving.moxfield import fetch_deck_json_single_try, deck_json_to_deck_text
+        from ..moxfield import fetch_deck_json_single_try, deck_json_to_deck_text
 
         try:
             deck_json = fetch_deck_json_single_try(args.moxfield)
@@ -159,14 +154,12 @@ def main() -> int:
     else:
         deck_text = read_deck_text(args.deck if args.deck is not None else "-")
 
-    # Parse
     try:
         deck = parse_deck_text(deck_text)
     except Exception as e:
         print(f"ERROR: Failed to parse decklist: {e}", file=sys.stderr)
         return 2
 
-    # Scryfall facts (+ cache)
     uniq_names = sorted(deck.counts.keys(), key=str.lower)
     scry = ScryfallClient(cache_path=args.scryfall_cache, offline=bool(args.offline))
     try:
@@ -185,7 +178,6 @@ def main() -> int:
     facts_roles = build_facts_and_roles(found_map, inline_tags=deck.inline_tags)
     idx = CardIndex(facts_roles)
 
-    # explain output should not break JSON
     if args.explain_roles:
         _print_role_report(deck, idx, sys.stderr if args.json else sys.stdout)
 
@@ -215,19 +207,19 @@ def main() -> int:
         if total > 0:
             avg_win_turn = sum(int(t) * int(v) for t, v in dist.items()) / total
 
-    # RESULTS FIRST
     avg_str = f"{avg_win_turn:.1f}" if avg_win_turn is not None else "N/A"
+    max_str = str(max_win_turn) if max_win_turn is not None else "N/A"
+    delta_str = f"{float(delta):.4f}" if isinstance(delta, (int, float)) else "N/A"
     print(
         f"{_bold('Results', color)} - "
         f"Draw By({args.draw_by}): {_pct(draw_rate, color)} "
         f"Win By({args.win_by}): {_pct(win_rate, color)} "
-        f"Avg Win Turn: {avg_str}"
-        f"Max Win Turn: {args.max_win_turn}"
-        f"Delta: {args.avg_to_max_delta_capped}"
+        f"Avg Win Turn: {avg_str} "
+        f"Max Win Turn: {max_str} "
+        f"Delta: {delta_str}"
     )
-    print("")  # blank line
+    print("")
 
-    # summary AFTER (counts live here)
     _print_dim(
         f"summary: trials={trials} max_mulls={args.max_mulls} dmg>={args.damage_threshold} "
         f"draw_ok={draw_count}/{trials} win_ok={win_count}/{trials}",
