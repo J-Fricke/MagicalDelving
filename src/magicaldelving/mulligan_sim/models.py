@@ -72,37 +72,28 @@ class Permanent:
     delayed: List[DelayedEffect] = field(default_factory=list)
 
     # ---- predicates / helpers ----
+    # NOTE: These delegate to rules modules so Permanent stays data-centric and keyword/eligibility logic
+    # can evolve without changing this class.
 
     def is_creature(self) -> bool:
-        if "Creature" in self.type_overrides_add:
-            return True
-        if "Creature" in self.type_overrides_remove:
-            return False
-        return "Creature" in self.types
+        from .rules.eligibility import is_creature
+        return is_creature(self)
 
     def has_keyword(self, kw: str) -> bool:
-        return kw in self.keywords
+        from .rules.keywords import has
+        return has(self, kw)
 
     def has_haste(self, st: "GameState") -> bool:
-        # Prefer keywords to reflect continuous effects; keep finisher_haste as a temporary global.
-        return st.finisher_haste or ("Haste" in self.keywords)
+        from .rules.keywords import has_haste
+        return has_haste(self, st)
 
     def can_tap(self, st: "GameState") -> bool:
-        # “summoning sickness” eligibility (ignores tapped-ness)
-        if not self.is_creature():
-            return False
-        if not self.sick:
-            return True
-        return self.has_haste(st)
+        from .rules.eligibility import can_tap
+        return can_tap(self, st)
 
     def can_attack(self, st: "GameState") -> bool:
-        if not self.is_creature():
-            return False
-        if self.tapped:
-            return False
-        if not self.sick:
-            return True
-        return self.has_haste(st)
+        from .rules.eligibility import can_attack
+        return can_attack(self, st)
 
     def power_int(self) -> int:
         """
@@ -156,6 +147,10 @@ class Permanent:
             # delayed effects prevent safe merge unless identical; usually empty at cleanup
             tuple((d.timing, getattr(d.fn, "__name__", "fn")) for d in self.delayed),
         )
+
+    def is_type(self, t: str) -> bool:
+        from .rules.types import is_type
+        return is_type(self, t)
 
 
 @dataclass

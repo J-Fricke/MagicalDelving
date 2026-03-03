@@ -5,6 +5,7 @@ from typing import Optional, Tuple
 from ..index import CardIndex
 from ..models import GameState
 from ..engine.state_mutators import recompute_continuous_effects
+from ..rules import keywords as kw
 
 
 def evaluate_combat_step(st: GameState, idx: CardIndex) -> int:
@@ -27,7 +28,7 @@ def evaluate_combat_step(st: GameState, idx: CardIndex) -> int:
     total = 0
     for p in attackers:
         dmg = p.power_int() * p.qty
-        if p.has_keyword("DoubleStrike"):
+        if kw.has_double_strike(p):
             dmg *= 2
         total += dmg
 

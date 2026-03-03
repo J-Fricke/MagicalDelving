@@ -5,6 +5,7 @@ from typing import Dict, List, Tuple
 
 from ..index import CardIndex
 from ..models import GameState
+from ..rules import keywords as kw
 
 
 _ANTHEM_PT_RE = re.compile(r"creatures you control get \+(\d+)\/\+(\d+)", re.IGNORECASE)
@@ -89,13 +90,24 @@ def recompute_continuous_effects(st: GameState, idx: CardIndex) -> None:
             p.power = (p.power or 0) + dp
             p.toughness = (p.toughness or 0) + dt
 
-        for kw in team_kw:
-            p.keywords.add(kw)
+        for k in team_kw:
+            p.keywords.add(k)
 
         if not p.is_card:
             for dp, dt in token_pt:
                 p.power = (p.power or 0) + dp
                 p.toughness = (p.toughness or 0) + dt
+        # Global finisher flags (temporary back-compat)
+        if st.finisher_boost:
+            p.power = (p.power or 0) + st.finisher_boost
+            p.toughness = (p.toughness or 0) + st.finisher_boost
+
+        if st.finisher_haste:
+            p.keywords.add(kw.HASTE)
+        if st.finisher_trample:
+            p.keywords.add(kw.TRAMPLE)
+        if st.finisher_double_strike:
+            p.keywords.add(kw.DOUBLE_STRIKE)
 
 
 def run_cleanup(st: GameState, idx: CardIndex) -> None:
