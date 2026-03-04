@@ -36,6 +36,18 @@ def recompute_continuous_effects(st: GameState, idx: CardIndex) -> None:
     # 1) reset derived stats
     for p in st.iter_permanents():
         # start from base (default to 0 if unknown)
+        # Seed missing base P/T from facts (one-time, numeric only)
+        if p.is_card and (p.base_power is None or p.base_toughness is None):
+            f = idx.facts(p.name)
+            if f:
+                try:
+                    if p.base_power is None and f.power is not None:
+                        p.base_power = int(f.power)
+                    if p.base_toughness is None and f.toughness is not None:
+                        p.base_toughness = int(f.toughness)
+                except Exception:
+                    # TODO(audit): unresolved non-numeric P/T (e.g., '*', '0+*', etc.)
+                    pass
         p.power = int(p.base_power) if p.base_power is not None else 0
         p.toughness = int(p.base_toughness) if p.base_toughness is not None else 0
 

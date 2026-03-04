@@ -4,7 +4,7 @@ from typing import Optional, Tuple
 
 from ..index import CardIndex
 from ..models import GameState
-from ..engine.state_mutators import recompute_continuous_effects
+from ..engine.continuous import ensure_continuous_effects
 from ..rules import keywords as kw
 
 
@@ -23,7 +23,7 @@ def evaluate_combat_step(st: GameState, idx: CardIndex) -> int:
 
     # Attack triggers may create tokens / buffs / etc.
     st.emit("ATTACK", {"attackers": attackers})
-    recompute_continuous_effects(st, idx)
+    ensure_continuous_effects(st, idx)
 
     total = 0
     for p in attackers:

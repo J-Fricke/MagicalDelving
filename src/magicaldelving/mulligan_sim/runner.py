@@ -36,6 +36,9 @@ def run_sim(
         hand, lib = london_mulligan(base_cards, card_index, rng, max_mulls=max_mulls)
 
         st = GameState(turn=0, hand=hand, library=list(lib))
+        audit_this = (rng.random() < 0.01)   # 1% sample
+        st.audit_enabled = audit_this
+        st.audit_max_events = 8000
         engine_online = False
         win_turn: Optional[int] = None
 

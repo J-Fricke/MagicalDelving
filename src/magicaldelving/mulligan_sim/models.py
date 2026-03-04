@@ -240,6 +240,31 @@ class GameState:
         for fn in self.handlers.get(event, []):
             fn(self, payload)
 
+    land_drops_remaining: int = 1
+    extra_land_drops_gained_this_turn: int = 0
+
+    def add_land_drops(self, n: int, *, source: str = "") -> None:
+        n = int(n)
+        if n <= 0:
+            return
+        self.extra_land_drops_gained_this_turn += n
+        self.land_drops_remaining += n
+        # TODO: if auditing, log (turn, source, n)
+
+    continuous_dirty: bool = True
+    audit_enabled: bool = False
+    audit_events: list[dict] = field(default_factory=list)
+    audit_max_events: int = 5000
+
+    def audit(self, kind: str, **data) -> None:
+        if not getattr(self, "audit_enabled", False):
+            return
+        ev = {"turn": self.turn, "kind": kind, **data}
+        self.audit_events.append(ev)
+        if len(self.audit_events) > getattr(self, "audit_max_events", 5000):
+            # hard cap to avoid runaway
+            self.audit_events.pop(0)
+
 
 def _copy_perm_for_new_pid(p: Permanent, new_pid: int) -> Permanent:
     return Permanent(

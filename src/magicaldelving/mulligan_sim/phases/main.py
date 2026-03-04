@@ -7,6 +7,8 @@ from ..index import CardIndex
 from ..models import GameState, Permanent
 from ..transform import apply_first_main
 from ..mana import compute_burst_mana_pools, compute_creature_tap_mana_pool, default_cast_policy
+from ..rules.crew import crew_precombat
+from ..engine.continuous import ensure_continuous_effects, mark_continuous_dirty
 
 
 @dataclass
@@ -53,7 +55,7 @@ def _add_passive_generic_tokens(st: GameState, n: int) -> None:
     tp.sick = True
 
 
-def main_phase_one(st: GameState, idx: CardIndex, *, engine_online: bool) -> tuple[bool, MainManaCtx]:
+def main_phase(st: GameState, idx: CardIndex, *, engine_online: bool) -> tuple[bool, MainManaCtx]:
     """
     Main phase 1:
       - first main transforms (flip before mana)
@@ -62,12 +64,12 @@ def main_phase_one(st: GameState, idx: CardIndex, *, engine_online: bool) -> tup
       - engine draw (legacy approximation)
       - mana + cast policy
     """
-    # first main transforms (flip before you make mana)
-    apply_first_main(st, idx)
+    # land drop(s)
+    if st.land_drops_remaining > 0:
+        for c in list(st.hand):
+            if not idx.is_land(c):
+                continue
 
-    # land drop (1)
-    for c in list(st.hand):
-        if idx.is_land(c):
             st.hand.remove(c)
             pid = st.add_permanent(c, entered_turn=st.turn, face=0, is_card=True, qty=1)
             p = st.battlefield[pid]
@@ -76,8 +78,11 @@ def main_phase_one(st: GameState, idx: CardIndex, *, engine_online: bool) -> tup
             is_land = idx.is_land_perm(p)
             is_creature = idx.is_creature_perm(p)
             is_burst = "BurstManaFromCreatures" in idx.roles_for_perm(p)
+
             if is_land and (not is_creature) and (not is_burst):
                 st.lands_in_play += 1
+
+            st.land_drops_remaining = max(0, st.land_drops_remaining - 1)
             break
 
     # passive token growth: each TokenMaker permanent in play (from prior turns) adds 1 token/turn
@@ -116,12 +121,23 @@ def main_phase_one(st: GameState, idx: CardIndex, *, engine_online: bool) -> tup
         burst_land_sources=burst_land_sources,
         burst_creature_sources=burst_creature_sources,
     )
+
     return engine_online, ctx
 
 
-def main_phase_two(st: GameState, idx: CardIndex, *, engine_online: bool) -> bool:
-    """
-    Main phase 2 (post-combat).
-    TODO: enable post-combat casting with floating mana / combat-generated resources.
-    """
-    return engine_online
+def main_phase_one(st: GameState, idx: CardIndex, *, engine_online: bool) -> tuple[bool, MainManaCtx]:
+    # first main transforms (flip before you make mana)
+    apply_first_main(st, idx)
+    (engine_online, ctx) = main_phase(st,idx, engine_online=engine_online)
+    crew_precombat(st, idx)
+    mark_continuous_dirty(st)
+    ensure_continuous_effects(st, idx)
+
+    return engine_online, ctx
+
+
+def main_phase_two(st: GameState, idx: CardIndex, *, engine_online: bool) -> tuple[bool, MainManaCtx]:
+    (engine_online, ctx) = main_phase(st, idx, engine_online=engine_online)
+
+    return engine_online, ctx
+

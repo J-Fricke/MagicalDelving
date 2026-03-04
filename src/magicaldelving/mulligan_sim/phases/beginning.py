@@ -4,6 +4,7 @@ from ..index import CardIndex
 from ..models import GameState
 from ..transform import apply_upkeep
 from ..engine.state_mutators import beginning_merge
+from ..rules.land_drops import extra_land_drops_from_board
 
 
 def beginning_phase(st: GameState, idx: CardIndex) -> None:
@@ -43,6 +44,11 @@ def beginning_phase(st: GameState, idx: CardIndex) -> None:
 
     # Upkeep transforms/triggers
     apply_upkeep(st, idx)
+
+    extra, saw_unhandled = extra_land_drops_from_board(st, idx)
+    st.land_drops_remaining = 1 + extra
+    st.extra_land_drops_gained_this_turn = 0  # reset one-shot grants
+    # TODO: if saw_unhandled: add to audit log (card name + oracle snippet)
 
     # Draw step (EDH draws on T1)
     if st.library:
