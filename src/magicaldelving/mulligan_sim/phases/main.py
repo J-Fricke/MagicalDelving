@@ -83,6 +83,7 @@ def main_phase(st: GameState, idx: CardIndex, *, engine_online: bool) -> tuple[b
                 st.lands_in_play += 1
 
             st.land_drops_remaining = max(0, st.land_drops_remaining - 1)
+            st.audit("PLAY_LAND", card=c, pid=pid, land_drops_remaining=st.land_drops_remaining)
             break
 
     # passive token growth: each TokenMaker permanent in play (from prior turns) adds 1 token/turn
@@ -95,11 +96,14 @@ def main_phase(st: GameState, idx: CardIndex, *, engine_online: bool) -> tuple[b
         token_makers += p.qty
     if token_makers:
         _add_passive_generic_tokens(st, token_makers)
+        st.audit("PASSIVE_TOKENS", n=token_makers)
 
     # draw engine online?
     engine_online = engine_online or any("DrawEngine" in idx.roles_for_perm(p) for p in st.iter_permanents())
     if engine_online and st.library:
-        st.hand.append(st.library.pop(0))
+        card = st.library.pop(0)
+        st.hand.append(card)
+        st.audit("ENGINE_DRAW", card=card)
 
     # mana: static first (normal lands + static ramp count)
     available_mana = st.lands_in_play + st.ramp_sources_in_play
@@ -126,6 +130,8 @@ def main_phase(st: GameState, idx: CardIndex, *, engine_online: bool) -> tuple[b
 
 
 def main_phase_one(st: GameState, idx: CardIndex, *, engine_online: bool) -> tuple[bool, MainManaCtx]:
+    st.audit_phase = "MAIN1"
+    st.audit("MAIN_START", hand=list(st.hand))
     # first main transforms (flip before you make mana)
     apply_first_main(st, idx)
     (engine_online, ctx) = main_phase(st,idx, engine_online=engine_online)
@@ -137,6 +143,8 @@ def main_phase_one(st: GameState, idx: CardIndex, *, engine_online: bool) -> tup
 
 
 def main_phase_two(st: GameState, idx: CardIndex, *, engine_online: bool) -> tuple[bool, MainManaCtx]:
+    st.audit_phase = "MAIN2"
+    st.audit("MAIN_START", hand=list(st.hand))
     (engine_online, ctx) = main_phase(st, idx, engine_online=engine_online)
 
     return engine_online, ctx

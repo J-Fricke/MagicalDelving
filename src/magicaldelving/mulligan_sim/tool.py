@@ -34,6 +34,9 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     ap.add_argument("--win-by", type=int, default=DEFAULT_WIN_BY, help="Turn by which we want to win")
     ap.add_argument("--damage-threshold", type=int, default=DEFAULT_DAMAGE_THRESHOLD, help="Damage threshold to count as win")
     ap.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS, help="Simulate up to this turn (safety cap)")
+    ap.add_argument("--audit-rate", type=float, default=0.01, help="Fraction of trials to capture full replay tape (0..1)")
+    ap.add_argument("--audit-max-replays", type=int, default=50, help="Max number of replays to retain/output")
+    ap.add_argument("--audit-out", default=None, help="Write sampled replay tapes to this file (JSON array)")
 
     return ap.parse_args(argv)
 
@@ -184,7 +187,12 @@ def main() -> int:
     goals = SimGoals(draw_by_turn=args.draw_by, win_by_turn=args.win_by, damage_threshold=args.damage_threshold)
     cfg = SimConfig(trials=args.iters, seed=args.seed, max_turns=args.max_turns)
 
-    results = run_sim(deck=deck, card_index=idx, goals=goals, cfg=cfg, max_mulls=args.max_mulls)
+    results = run_sim(deck=deck, card_index=idx, goals=goals, cfg=cfg, max_mulls=args.max_mulls, audit_rate=args.audit_rate, audit_max_replays=args.audit_max_replays)
+
+    if args.audit_out:
+        replays = results.get("replays") or []
+        with open(args.audit_out, "w", encoding="utf-8") as f:
+            json.dump(replays, f, indent=2, sort_keys=True)
 
     if args.json:
         print(json.dumps(results, indent=2, sort_keys=True))

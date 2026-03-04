@@ -252,18 +252,49 @@ class GameState:
         # TODO: if auditing, log (turn, source, n)
 
     continuous_dirty: bool = True
+
+    # --- Audit / replay tape (sampled per-trial) ---
     audit_enabled: bool = False
-    audit_events: list[dict] = field(default_factory=list)
-    audit_max_events: int = 5000
+    audit_max_events: int = 8000
+    audit_phase: str = ""  # set by phases: MULLIGAN/BEGINNING/MAIN1/COMBAT/END/etc.
+    audit_turns: Dict[int, Dict[str, List[dict]]] = field(default_factory=dict)
+
+    def audit_at(self, turn: int, phase: str, kind: str, **data) -> None:
+        """Record an action in the replay tape, grouped by turn -> phase -> actions."""
+        if not self.audit_enabled:
+            return
+        t = int(turn)
+        ph = phase or ""
+        bucket = self.audit_turns.setdefault(t, {}).setdefault(ph, [])
+        bucket.append({"kind": kind, **data})
+        # hard cap to avoid runaway
+        if sum(len(v) for phs in self.audit_turns.values() for v in phs.values()) > self.audit_max_events:
+            # drop oldest action from the smallest turn bucket
+            oldest_t = min(self.audit_turns.keys())
+            oldest_phs = self.audit_turns.get(oldest_t, {})
+            if oldest_phs:
+                oldest_ph = sorted(oldest_phs.keys())[0]
+                if oldest_phs[oldest_ph]:
+                    oldest_phs[oldest_ph].pop(0)
+                if not oldest_phs[oldest_ph]:
+                    del oldest_phs[oldest_ph]
+            if not oldest_phs:
+                self.audit_turns.pop(oldest_t, None)
 
     def audit(self, kind: str, **data) -> None:
-        if not getattr(self, "audit_enabled", False):
-            return
-        ev = {"turn": self.turn, "kind": kind, **data}
-        self.audit_events.append(ev)
-        if len(self.audit_events) > getattr(self, "audit_max_events", 5000):
-            # hard cap to avoid runaway
-            self.audit_events.pop(0)
+        """Record an action at the current turn + current phase."""
+        self.audit_at(self.turn, self.audit_phase, kind, **data)
+
+    def export_replay_turns(self) -> List[dict]:
+        """Export as: [{"turn": int, "BEGINNING": [...], "MAIN1": [...], ...}, ...]"""
+        out: List[dict] = []
+        for t in sorted(self.audit_turns.keys()):
+            phases = self.audit_turns[t]
+            # preserve insertion order within each phase; phases are objects
+            row = {"turn": t}
+            row.update(phases)
+            out.append(row)
+        return out
 
 
 def _copy_perm_for_new_pid(p: Permanent, new_pid: int) -> Permanent:

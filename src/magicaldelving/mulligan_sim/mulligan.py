@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import random
-from typing import List, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 from .defaults import ACTION_ROLES
 from .index import CardIndex
@@ -12,6 +12,7 @@ def london_mulligan(
         idx: CardIndex,
         rng: random.Random,
         max_mulls: int,
+        audit_cb: Optional[Callable[[str], Any]] = None,
 ) -> Tuple[List[str], List[str]]:
     """
     Better London mulligan heuristic:
@@ -79,8 +80,9 @@ def london_mulligan(
 
         return True
 
-    def bottom_cards(hand: List[str], mulls_used: int) -> None:
+    def bottom_cards(hand: List[str], mulls_used: int) -> List[str]:
         desired_lands = 3
+        bottomed: List[str] = []
         while mulls_used > 0 and hand:
             lands_in_hand = [c for c in hand if idx.is_land(c)]
             roles_cache = {c: idx.roles(c) for c in hand}
@@ -115,7 +117,10 @@ def london_mulligan(
 
             worst = min(hand, key=worst_key)
             hand.remove(worst)
+            bottomed.append(worst)
             mulls_used -= 1
+        return bottomed
+
 
     last_hand: List[str] = []
     last_lib: List[str] = []
@@ -128,9 +133,15 @@ def london_mulligan(
         lib = d[7:]
 
         last_hand, last_lib, mulls_used = hand, lib, m
+        if audit_cb:
+            audit_cb("MULL_DRAW", mull=m, hand=list(hand))
 
         if keepable(hand, m):
+            if audit_cb:
+                audit_cb("MULL_KEEP", mull=m, hand=list(hand))
             break
 
-    bottom_cards(last_hand, mulls_used)
+    bottomed = bottom_cards(last_hand, mulls_used)
+    if audit_cb:
+        audit_cb("MULL_BOTTOM", mull=mulls_used, bottomed=list(bottomed), final_hand=list(last_hand))
     return last_hand, last_lib

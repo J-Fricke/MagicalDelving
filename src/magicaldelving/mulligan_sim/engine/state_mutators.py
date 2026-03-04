@@ -33,6 +33,25 @@ def recompute_continuous_effects(st: GameState, idx: CardIndex) -> None:
     Rebuild each permanent's current power/toughness/keywords from base + counters + active continuous sources.
     This is intentionally small and extensible.
     """
+    pre = None
+    if getattr(st, "audit_enabled", False):
+        def _snap(p):
+            return {
+                "qty": p.qty,
+                "tapped": p.tapped,
+                "sick": p.sick,
+                "types": tuple(sorted(p.types)),
+                "subtypes": tuple(sorted(p.subtypes)),
+                "keywords": tuple(sorted(p.keywords)),
+                "base_power": p.base_power,
+                "base_toughness": p.base_toughness,
+                "power": p.power,
+                "toughness": p.toughness,
+                "counters": tuple(sorted(p.counters.items())),
+                "override": p.attack_power_override_this_turn,
+            }
+        pre = {p.pid: _snap(p) for p in st.iter_permanents()}
+
     # 1) reset derived stats
     for p in st.iter_permanents():
         # start from base (default to 0 if unknown)
@@ -121,6 +140,36 @@ def recompute_continuous_effects(st: GameState, idx: CardIndex) -> None:
         if st.finisher_double_strike:
             p.keywords.add(kw.DOUBLE_STRIKE)
 
+
+
+    if pre is not None:
+        for p in st.iter_permanents():
+            old = pre.get(p.pid)
+            if old is None:
+                continue
+            now = {
+                "qty": p.qty,
+                "tapped": p.tapped,
+                "sick": p.sick,
+                "types": tuple(sorted(p.types)),
+                "subtypes": tuple(sorted(p.subtypes)),
+                "keywords": tuple(sorted(p.keywords)),
+                "base_power": p.base_power,
+                "base_toughness": p.base_toughness,
+                "power": p.power,
+                "toughness": p.toughness,
+                "counters": tuple(sorted(p.counters.items())),
+                "override": p.attack_power_override_this_turn,
+            }
+            if now == old:
+                continue
+            changes = {}
+            for k, v_old in old.items():
+                v_new = now.get(k)
+                if v_new != v_old:
+                    changes[k] = {"from": v_old, "to": v_new}
+            if changes:
+                st.audit("PERM_MUTATION", pid=p.pid, name=p.name, changes=changes)
 
 def run_cleanup(st: GameState, idx: CardIndex) -> None:
     """

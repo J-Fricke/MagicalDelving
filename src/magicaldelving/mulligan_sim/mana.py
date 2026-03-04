@@ -359,6 +359,7 @@ def default_cast_policy(
             break
 
         st.hand.remove(c)
+        st.audit("CAST", card=c, cost=cost)
 
         f = idx.facts(c)
         is_perm = bool(f and not (f.is_instant or f.is_sorcery))
@@ -367,6 +368,7 @@ def default_cast_policy(
         if is_perm:
             new_pid = st.add_permanent(c, entered_turn=st.turn, face=0, is_card=True, qty=1)
             new_perm = st.battlefield.get(new_pid)
+            st.audit("ETB", card=c, pid=new_pid)
 
         # Ramp: only increment static sources for non-dorks, non-enablers, non-burst.
         if has_role_name(c, "Ramp"):
@@ -379,27 +381,36 @@ def default_cast_policy(
         # Refill
         if has_role_name(c, "Refill"):
             st.refills_resolved += 1
+            drawn: List[str] = []
             for _ in range(2):
                 if st.library:
-                    st.hand.append(st.library.pop(0))
+                    card = st.library.pop(0)
+                    st.hand.append(card)
+                    drawn.append(card)
+            if drawn:
+                st.audit("REFILL_DRAW", card=c, drawn=drawn)
 
         # Tokens (legacy: count + generic token creation)
         if (has_role_name(c, "TokenBurst") or has_role_name(c, "TokenMaker")) and f:
             created = estimate_tokens_created_from_text(f.oracle_text)
             if created > 0:
                 _add_generic_creature_tokens(st, f.oracle_text, created)
+                st.audit("TOKEN_CREATE", card=c, n=created)
 
         # Finisher effects
         if _is_x10_haste_pump_finisher(idx, c):
             st.finisher_boost = max(st.finisher_boost, 10)
             st.finisher_haste = True
+            st.audit("FINISHER", card=c, boost=st.finisher_boost, haste=True)
 
         if _is_greatest_power_trample_pump(idx, c):
             x = st.max_creature_power()
             st.finisher_boost = max(st.finisher_boost, x)
             st.finisher_trample = True
+            st.audit("FINISHER", card=c, boost=st.finisher_boost, trample=True)
 
         if has_role_name(c, "Finisher") and f and (f.is_instant or f.is_sorcery):
             st.finisher_boost = max(st.finisher_boost, 3)
+            st.audit("FINISHER", card=c, boost=st.finisher_boost)
 
     return available_mana, tap_creature_pool, burst_land_sources, burst_creature_sources

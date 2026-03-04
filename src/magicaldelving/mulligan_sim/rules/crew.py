@@ -148,6 +148,7 @@ def crew_precombat(st: GameState, idx: CardIndex) -> None:
             continue
 
         v_power = v.power_int()
+        st.audit("CREW_ATTEMPT", vehicle_pid=v_pid, vehicle=v.name, crew=crew_n, vehicle_power=v_power)
         if v_power <= 0:
             continue
 
@@ -177,17 +178,21 @@ def crew_precombat(st: GameState, idx: CardIndex) -> None:
                 continue
             # tap one unit at a time (qty-aware)
             _tap_units(st, c_pid, 1)
+            st.audit("TAP_FOR_CREW", crewer_pid=c_pid, crewer=cp.name if cp else None, power=pw, opp_cost=opp_cost)
             picked.append(CrewTap(pid=c_pid, n=1, power=pw, opp_cost=opp_cost))
             have += pw
 
         if have < crew_n:
             # couldn't pay crew
+            st.audit("CREW_FAIL", vehicle_pid=v_pid, vehicle=v.name if v else None, crew=crew_n, have=have)
             continue
 
         # Net gain check: benefit (vehicle power) must beat what we gave up (opp costs)
         cost = sum(t.opp_cost for t in picked)
         if v_power <= cost:
+            st.audit("CREW_SKIP_NET", vehicle_pid=v_pid, vehicle=v.name if v else None, vehicle_power=v_power, cost=cost)
             continue
 
         # Commit animation
         _add_type_until_cleanup(st, v_pid, ty.CREATURE)
+        st.audit("CREW_SUCCESS", vehicle_pid=v_pid, vehicle=st.battlefield.get(v_pid).name if st.battlefield.get(v_pid) else None, crew=crew_n, have=have)

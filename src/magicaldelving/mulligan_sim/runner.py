@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+import hashlib
 from collections import Counter
 from typing import Any, Dict, List, Optional
 
@@ -15,12 +16,26 @@ from .phases.combat import evaluate_combat_step
 from .phases.end import end_phase
 
 
+
+
+def _should_audit(seed: int | None, trial_idx: int, rate: float) -> bool:
+    """Deterministic sampling without consuming RNG state."""
+    if rate <= 0.0:
+        return False
+    if rate >= 1.0:
+        return True
+    key = f"{seed or 0}:{trial_idx}".encode("utf-8")
+    v = int.from_bytes(hashlib.blake2b(key, digest_size=2).digest(), "big") / 65535.0
+    return v < rate
 def run_sim(
         deck,
         card_index: CardIndex,
         goals: SimGoals,
         cfg: SimConfig,
         max_mulls: int,
+        *,
+        audit_rate: float = 0.01,
+        audit_max_replays: int = 50,
 ) -> Dict[str, Any]:
     rng = random.Random()
     if cfg.seed is not None:
@@ -32,16 +47,28 @@ def run_sim(
 
     base_cards = list(deck.library)
 
-    for _ in range(cfg.trials):
-        hand, lib = london_mulligan(base_cards, card_index, rng, max_mulls=max_mulls)
+    replays: List[Dict[str, Any]] = []
+
+    for trial_idx in range(cfg.trials):
+        audit_this = _should_audit(cfg.seed, trial_idx, float(audit_rate)) and (len(replays) < int(audit_max_replays))
+        pre_mull: List[Dict[str, Any]] = []
+        def _audit_cb(kind: str, **data: Any) -> None:
+            pre_mull.append({"kind": kind, **data})
+        audit_cb = _audit_cb if audit_this else None
+        hand, lib = london_mulligan(base_cards, card_index, rng, max_mulls=max_mulls, audit_cb=audit_cb)
 
         st = GameState(turn=0, hand=hand, library=list(lib))
-        audit_this = (rng.random() < 0.01)   # 1% sample
-        st.audit_enabled = audit_this
+        st.audit_enabled = bool(audit_this)
         st.audit_max_events = 8000
+        if st.audit_enabled:
+            st.audit_phase = "MULLIGAN"
+            for ev in pre_mull:
+                kind = ev.pop("kind")
+                st.audit_at(0, "MULLIGAN", kind, **ev)
+
         engine_online = False
         win_turn: Optional[int] = None
-
+        win_reason: Optional[str] = None
         for turn in range(1, cfg.max_turns + 1):
             st.turn = turn
 
@@ -70,16 +97,27 @@ def run_sim(
             # Win check (alternate wincons)
             if has_wincon_resolved(st, card_index):
                 win_turn = turn
+                win_reason = "wincon"
                 break
 
             # Combat phase
             st.cumulative_damage += evaluate_combat_step(st, card_index)
             if st.cumulative_damage >= goals.damage_threshold:
                 win_turn = turn
+                win_reason = "damage"
                 break
 
             # End phase: end step transforms + cleanup + merge + attackers_last_turn
             end_phase(st, card_index)
+
+        if st.audit_enabled:
+            replays.append({
+                "trial": trial_idx,
+                "win_turn": win_turn,
+                "win_reason": win_reason,
+                "cumulative_damage": st.cumulative_damage,
+                "turns": st.export_replay_turns(),
+            })
 
         if win_turn is not None:
             first_win_turns.append(win_turn)
@@ -130,4 +168,6 @@ def run_sim(
             "damage_threshold": goals.damage_threshold,
         },
         "max_mulls": max_mulls,
+        "audit": {"rate": float(audit_rate), "max_replays": int(audit_max_replays), "replays": len(replays)},
+        "replays": replays,
     }

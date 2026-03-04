@@ -9,6 +9,7 @@ from ..rules import keywords as kw
 
 
 def evaluate_combat_step(st: GameState, idx: CardIndex) -> int:
+    st.audit_phase = "COMBAT"
     attackers = []
     attackers_qty = 0
 
@@ -22,6 +23,7 @@ def evaluate_combat_step(st: GameState, idx: CardIndex) -> int:
         return 0
 
     # Attack triggers may create tokens / buffs / etc.
+    st.audit("DECLARE_ATTACKERS", attackers=[{"pid": p.pid, "name": p.name, "qty": p.qty, "power": p.power_int(), "keywords": sorted(p.keywords)} for p in attackers])
     st.emit("ATTACK", {"attackers": attackers})
     ensure_continuous_effects(st, idx)
 
@@ -33,6 +35,7 @@ def evaluate_combat_step(st: GameState, idx: CardIndex) -> int:
         total += dmg
 
     total = int(total * 0.60)
+    st.audit("COMBAT_DAMAGE", damage=total, connect=0.60)
     return max(0, total)
 
 
