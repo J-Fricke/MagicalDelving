@@ -17,8 +17,8 @@ def beginning_phase(st: GameState, idx: CardIndex) -> None:
       - Upkeep triggers/transforms
       - Draw step (EDH draws on turn 1)
     """
-    st.audit("TURN_START", hand=list(st.hand), library=len(st.library))
     st.audit_phase = "BEGINNING"
+    st.audit("TURN_START", hand=list(st.hand), library=len(st.library))
     # Untap + clear per-turn overrides
     for p in st.iter_permanents():
         p.tapped = False

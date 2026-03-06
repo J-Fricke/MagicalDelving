@@ -65,6 +65,8 @@ def run_sim(
             for ev in pre_mull:
                 kind = ev.pop("kind")
                 st.audit_at(0, "MULLIGAN", kind, **ev)
+            # Baseline snapshot for context before turn 1 begins.
+            st.audit_state(turn=0, when="after_mulligan")
 
         engine_online = False
         win_turn: Optional[int] = None
@@ -96,6 +98,7 @@ def run_sim(
 
             # Win check (alternate wincons)
             if has_wincon_resolved(st, card_index):
+                st.audit_state(turn=turn, when="wincon")
                 win_turn = turn
                 win_reason = "wincon"
                 break
@@ -103,12 +106,14 @@ def run_sim(
             # Combat phase
             st.cumulative_damage += evaluate_combat_step(st, card_index)
             if st.cumulative_damage >= goals.damage_threshold:
+                st.audit_state(turn=turn, when="damage")
                 win_turn = turn
                 win_reason = "damage"
                 break
 
             # End phase: end step transforms + cleanup + merge + attackers_last_turn
             end_phase(st, card_index)
+            st.audit_state(turn=turn, when="end")
 
         if st.audit_enabled:
             replays.append({

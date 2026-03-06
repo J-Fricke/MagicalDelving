@@ -258,6 +258,65 @@ class GameState:
     audit_max_events: int = 8000
     audit_phase: str = ""  # set by phases: MULLIGAN/BEGINNING/MAIN1/COMBAT/END/etc.
     audit_turns: Dict[int, Dict[str, List[dict]]] = field(default_factory=dict)
+    audit_turn_states: Dict[int, Dict[str, object]] = field(default_factory=dict)
+
+    def snapshot_state_compact(self) -> Dict[str, object]:
+        """Return a compact, debug-friendly view of the current gamestate.
+
+        This is intentionally "summary first" so it can sit inline in replay JSON.
+        Add fields as needed once we start debugging more advanced rules.
+        """
+
+        def _perm_row(p: Permanent) -> Dict[str, object]:
+            row: Dict[str, object] = {
+                "pid": int(p.pid),
+                "name": p.name,
+                "qty": int(p.qty),
+            }
+            if p.tapped:
+                row["tapped"] = True
+            if p.sick:
+                row["sick"] = True
+            if p.types:
+                row["types"] = sorted(p.types)
+            if p.keywords:
+                row["keywords"] = sorted(p.keywords)
+            if p.counters:
+                row["counters"] = dict(sorted(p.counters.items()))
+            # Power/toughness are only meaningful for creatures, but leaving them
+            # present when set helps with crew/animation debugging.
+            if p.power is not None:
+                row["power"] = int(p.power)
+            if p.toughness is not None:
+                row["toughness"] = int(p.toughness)
+            return row
+
+        board = [_perm_row(p) for p in sorted(self.iter_permanents(), key=lambda x: (x.name, x.pid))]
+        return {
+            "turn": int(self.turn),
+            "hand_size": int(len(self.hand)),
+            "library_size": int(len(self.library)),
+            "lands_in_play": int(self.lands_in_play),
+            "ramp_sources_in_play": int(self.ramp_sources_in_play),
+            "cumulative_damage": int(self.cumulative_damage),
+            "attackers_this_turn": int(self.attackers_this_turn),
+            "attackers_last_turn": int(self.attackers_last_turn),
+            "board": board,
+        }
+
+    def audit_state(self, *, turn: Optional[int] = None, when: str = "") -> None:
+        """Store a compact state snapshot for a given turn.
+
+        Snapshots are exported as a sibling field to phase logs (not as an action),
+        so it's easy to see state around the actions.
+        """
+        if not self.audit_enabled:
+            return
+        t = int(self.turn if turn is None else turn)
+        snap = self.snapshot_state_compact()
+        if when:
+            snap = {"when": when, **snap}
+        self.audit_turn_states[t] = snap
 
     def audit_at(self, turn: int, phase: str, kind: str, **data) -> None:
         """Record an action in the replay tape, grouped by turn -> phase -> actions."""
@@ -288,10 +347,13 @@ class GameState:
     def export_replay_turns(self) -> List[dict]:
         """Export as: [{"turn": int, "BEGINNING": [...], "MAIN1": [...], ...}, ...]"""
         out: List[dict] = []
-        for t in sorted(self.audit_turns.keys()):
-            phases = self.audit_turns[t]
+        all_turns = sorted(set(self.audit_turns.keys()) | set(self.audit_turn_states.keys()))
+        for t in all_turns:
+            phases = self.audit_turns.get(t, {})
             # preserve insertion order within each phase; phases are objects
             row = {"turn": t}
+            if t in self.audit_turn_states:
+                row["state"] = self.audit_turn_states[t]
             row.update(phases)
             out.append(row)
         return out

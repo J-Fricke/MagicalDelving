@@ -3,6 +3,8 @@ import json
 import os
 import sys
 from typing import Optional, Set, List, TextIO
+
+from .audit_dump import dump_replays
 from .defaults import (
     DEFAULT_TRIALS,
     DEFAULT_DRAW_BY,
@@ -192,7 +194,7 @@ def main() -> int:
     if args.audit_out:
         replays = results.get("replays") or []
         with open(args.audit_out, "w", encoding="utf-8") as f:
-            json.dump(replays, f, indent=2, sort_keys=True)
+            dump_replays(replays, f, indent=2, sort_keys=True)
 
     if args.json:
         print(json.dumps(results, indent=2, sort_keys=True))

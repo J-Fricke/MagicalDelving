@@ -13,7 +13,11 @@ def end_phase(st: GameState, idx: CardIndex) -> None:
       - cleanup (delayed effects + recompute + merge)
       - record attackers_last_turn
     """
+    st.audit_phase = "END"
     apply_end_step(st, idx)
+
+    # PERM_MUTATION and other recompute-side audit events should be attributed to cleanup.
+    st.audit_phase = "CLEANUP"
     run_cleanup(st, idx)
 
     # record for next-turn checks
