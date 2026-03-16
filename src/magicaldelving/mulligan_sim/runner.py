@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from .index import CardIndex
 from .models import GameState, SimConfig, SimGoals
+from .audit_log import AuditLog
 from .mulligan import london_mulligan
 from .win import has_wincon_resolved
 
@@ -59,20 +60,26 @@ def run_sim(
 
         st = GameState(turn=0, hand=hand, library=list(lib))
         st.audit_enabled = bool(audit_this)
-        st.audit_max_events = 8000
         if st.audit_enabled:
+            st.audit_log = AuditLog(max_events=8000)
             st.audit_phase = "MULLIGAN"
+            # Turn 0: start state + mulligan actions + end state.
+            st.audit_log.capture_start_state(st)
             for ev in pre_mull:
-                kind = ev.pop("kind")
-                st.audit_at(0, "MULLIGAN", kind, **ev)
-            # Baseline snapshot for context before turn 1 begins.
-            st.audit_state(turn=0, when="after_mulligan")
+                kind = ev.get("kind")
+                data = {k: v for k, v in ev.items() if k != "kind"}
+                st.audit(kind, **data)
+            st.audit_log.capture_end_state(st)
 
         engine_online = False
         win_turn: Optional[int] = None
         win_reason: Optional[str] = None
         for turn in range(1, cfg.max_turns + 1):
             st.turn = turn
+
+            if st.audit_enabled and st.audit_log is not None:
+                # Start-of-turn baseline (before untap/draw/etc.).
+                st.audit_log.capture_start_state(st)
 
             # Beginning phase: untap, clear per-turn flags, upkeep, draw, merge
             beginning_phase(st, card_index)
@@ -98,7 +105,8 @@ def run_sim(
 
             # Win check (alternate wincons)
             if has_wincon_resolved(st, card_index):
-                st.audit_state(turn=turn, when="wincon")
+                if st.audit_enabled and st.audit_log is not None:
+                    st.audit_log.capture_end_state(st)
                 win_turn = turn
                 win_reason = "wincon"
                 break
@@ -106,14 +114,17 @@ def run_sim(
             # Combat phase
             st.cumulative_damage += evaluate_combat_step(st, card_index)
             if st.cumulative_damage >= goals.damage_threshold:
-                st.audit_state(turn=turn, when="damage")
+                if st.audit_enabled and st.audit_log is not None:
+                    st.audit_log.capture_end_state(st)
                 win_turn = turn
                 win_reason = "damage"
                 break
 
             # End phase: end step transforms + cleanup + merge + attackers_last_turn
             end_phase(st, card_index)
-            st.audit_state(turn=turn, when="end")
+
+            if st.audit_enabled and st.audit_log is not None:
+                st.audit_log.capture_end_state(st)
 
         if st.audit_enabled:
             replays.append({

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .audit_log import AuditLog
 
 
 @dataclass(frozen=True)
@@ -253,110 +256,21 @@ class GameState:
 
     continuous_dirty: bool = True
 
-    # --- Audit / replay tape (sampled per-trial) ---
+    # --- Audit / replay output (sampled per-trial) ---
     audit_enabled: bool = False
-    audit_max_events: int = 8000
     audit_phase: str = ""  # set by phases: MULLIGAN/BEGINNING/MAIN1/COMBAT/END/etc.
-    audit_turns: Dict[int, Dict[str, List[dict]]] = field(default_factory=dict)
-    audit_turn_states: Dict[int, Dict[str, object]] = field(default_factory=dict)
+    audit_log: Optional["AuditLog"] = None
 
-    def snapshot_state_compact(self) -> Dict[str, object]:
-        """Return a compact, debug-friendly view of the current gamestate.
-
-        This is intentionally "summary first" so it can sit inline in replay JSON.
-        Add fields as needed once we start debugging more advanced rules.
-        """
-
-        def _perm_row(p: Permanent) -> Dict[str, object]:
-            row: Dict[str, object] = {
-                "pid": int(p.pid),
-                "name": p.name,
-                "qty": int(p.qty),
-            }
-            if p.tapped:
-                row["tapped"] = True
-            if p.sick:
-                row["sick"] = True
-            if p.types:
-                row["types"] = sorted(p.types)
-            if p.keywords:
-                row["keywords"] = sorted(p.keywords)
-            if p.counters:
-                row["counters"] = dict(sorted(p.counters.items()))
-            # Power/toughness are only meaningful for creatures, but leaving them
-            # present when set helps with crew/animation debugging.
-            if p.power is not None:
-                row["power"] = int(p.power)
-            if p.toughness is not None:
-                row["toughness"] = int(p.toughness)
-            return row
-
-        board = [_perm_row(p) for p in sorted(self.iter_permanents(), key=lambda x: (x.name, x.pid))]
-        return {
-            "turn": int(self.turn),
-            "hand_size": int(len(self.hand)),
-            "library_size": int(len(self.library)),
-            "lands_in_play": int(self.lands_in_play),
-            "ramp_sources_in_play": int(self.ramp_sources_in_play),
-            "cumulative_damage": int(self.cumulative_damage),
-            "attackers_this_turn": int(self.attackers_this_turn),
-            "attackers_last_turn": int(self.attackers_last_turn),
-            "board": board,
-        }
-
-    def audit_state(self, *, turn: Optional[int] = None, when: str = "") -> None:
-        """Store a compact state snapshot for a given turn.
-
-        Snapshots are exported as a sibling field to phase logs (not as an action),
-        so it's easy to see state around the actions.
-        """
-        if not self.audit_enabled:
-            return
-        t = int(self.turn if turn is None else turn)
-        snap = self.snapshot_state_compact()
-        if when:
-            snap = {"when": when, **snap}
-        self.audit_turn_states[t] = snap
-
-    def audit_at(self, turn: int, phase: str, kind: str, **data) -> None:
-        """Record an action in the replay tape, grouped by turn -> phase -> actions."""
-        if not self.audit_enabled:
-            return
-        t = int(turn)
-        ph = phase or ""
-        bucket = self.audit_turns.setdefault(t, {}).setdefault(ph, [])
-        bucket.append({"kind": kind, **data})
-        # hard cap to avoid runaway
-        if sum(len(v) for phs in self.audit_turns.values() for v in phs.values()) > self.audit_max_events:
-            # drop oldest action from the smallest turn bucket
-            oldest_t = min(self.audit_turns.keys())
-            oldest_phs = self.audit_turns.get(oldest_t, {})
-            if oldest_phs:
-                oldest_ph = sorted(oldest_phs.keys())[0]
-                if oldest_phs[oldest_ph]:
-                    oldest_phs[oldest_ph].pop(0)
-                if not oldest_phs[oldest_ph]:
-                    del oldest_phs[oldest_ph]
-            if not oldest_phs:
-                self.audit_turns.pop(oldest_t, None)
-
-    def audit(self, kind: str, **data) -> None:
+    def audit(self, kind: str, **data: Any) -> None:
         """Record an action at the current turn + current phase."""
-        self.audit_at(self.turn, self.audit_phase, kind, **data)
+        if not self.audit_enabled or self.audit_log is None:
+            return
+        self.audit_log.add_action(turn=self.turn, phase=self.audit_phase, kind=kind, data=data)
 
     def export_replay_turns(self) -> List[dict]:
-        """Export as: [{"turn": int, "BEGINNING": [...], "MAIN1": [...], ...}, ...]"""
-        out: List[dict] = []
-        all_turns = sorted(set(self.audit_turns.keys()) | set(self.audit_turn_states.keys()))
-        for t in all_turns:
-            phases = self.audit_turns.get(t, {})
-            # preserve insertion order within each phase; phases are objects
-            row = {"turn": t}
-            if t in self.audit_turn_states:
-                row["state"] = self.audit_turn_states[t]
-            row.update(phases)
-            out.append(row)
-        return out
+        if not self.audit_enabled or self.audit_log is None:
+            return []
+        return self.audit_log.export_turns()
 
 
 def _copy_perm_for_new_pid(p: Permanent, new_pid: int) -> Permanent:

@@ -194,7 +194,7 @@ def main() -> int:
     if args.audit_out:
         replays = results.get("replays") or []
         with open(args.audit_out, "w", encoding="utf-8") as f:
-            dump_replays(replays, f, indent=2, sort_keys=True)
+            dump_replays(replays, f, indent=2, sort_keys=False)
 
     if args.json:
         print(json.dumps(results, indent=2, sort_keys=True))

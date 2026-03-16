@@ -21,7 +21,7 @@ def dump_replays(
     fp: TextIO,
     *,
     indent: int = 2,
-    sort_keys: bool = True,
+    sort_keys: bool = False,
     phase_order: Optional[Sequence[str]] = None,
 ) -> None:
     """Pretty-print replay JSON with compact (single-line) action entries.
@@ -40,12 +40,34 @@ def dump_replays(
         # Match Python's indent-mode separators: comma w/ no space, colon w/ space.
         return json.dumps(v, ensure_ascii=False, sort_keys=sort_keys, separators=(",", ": "))
 
+    def _j_action(action: Dict[str, Any]) -> str:
+        # Ensure "kind" is first for readability, keep the rest in insertion order.
+        if "kind" in action:
+            ordered: Dict[str, Any] = {"kind": action.get("kind")}
+            for k, v in action.items():
+                if k == "kind":
+                    continue
+                ordered[k] = v
+            action = ordered
+        return json.dumps(action, ensure_ascii=False, sort_keys=False, separators=(",", ": "))
+
+    def _write_pretty_kv(level: int, k: str, v: Any, *, comma: bool) -> None:
+        dump = json.dumps(v, ensure_ascii=False, sort_keys=False, indent=indent)
+        lines = dump.splitlines() or [dump]
+        for li, line in enumerate(lines):
+            is_last = li == len(lines) - 1
+            trailing = "," if (comma and is_last) else ""
+            if li == 0:
+                fp.write(f"{_indent(level)}{json.dumps(k)}: {line}{trailing}\n")
+            else:
+                fp.write(f"{_indent(level)}{line}{trailing}\n")
+
     def _write_kv(level: int, k: str, v: Any, *, comma: bool) -> None:
         fp.write(f"{_indent(level)}{json.dumps(k)}: {_j(v)}")
         fp.write(",\n" if comma else "\n")
 
     def _ordered_phase_keys(turn_obj: Dict[str, Any]) -> List[str]:
-        keys = [k for k in turn_obj.keys() if k not in {"turn", "state"}]
+        keys = [k for k in turn_obj.keys() if k not in {"start_state", "end_state"}]
         ordered: List[str] = []
         for ph in phase_order:
             if ph in keys:
@@ -81,27 +103,25 @@ def dump_replays(
             for ti, turn_obj in enumerate(turns):
                 fp.write(f"{_indent(3)}{{\n")
 
-                # Turn number first
-                has_state = "state" in turn_obj
-                has_more_after_turn = (len(turn_obj.keys()) > 1)
-                _write_kv(4, "turn", turn_obj.get("turn"), comma=has_more_after_turn)
-
-                # Optional state snapshot (kept compact on a single line)
-                if has_state:
-                    # comma if there are phases after state
-                    phase_keys_for_comma = _ordered_phase_keys(turn_obj)
-                    _write_kv(4, "state", turn_obj.get("state"), comma=(len(phase_keys_for_comma) > 0))
-
+                # Start state (pretty printed)
+                has_start = "start_state" in turn_obj
+                has_end = "end_state" in turn_obj
                 phase_keys = _ordered_phase_keys(turn_obj)
+                if has_start:
+                    _write_pretty_kv(4, "start_state", turn_obj.get("start_state"), comma=(len(phase_keys) > 0 or has_end))
+
                 for pj, ph in enumerate(phase_keys):
                     actions = turn_obj.get(ph) or []
                     fp.write(f"{_indent(4)}{json.dumps(ph)}: [\n")
                     for aj, action in enumerate(actions):
-                        line = _j(action)
+                        line = _j_action(action)
                         trailing = "," if aj < len(actions) - 1 else ""
                         fp.write(f"{_indent(5)}{line}{trailing}\n")
                     fp.write(f"{_indent(4)}]")
-                    fp.write(",\n" if pj < len(phase_keys) - 1 else "\n")
+                    fp.write(",\n" if (pj < len(phase_keys) - 1 or has_end) else "\n")
+
+                if has_end:
+                    _write_pretty_kv(4, "end_state", turn_obj.get("end_state"), comma=False)
 
                 fp.write(f"{_indent(3)}}}")
                 fp.write(",\n" if ti < len(turns) - 1 else "\n")
